@@ -36,6 +36,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from PIL import Image, ImageTk
 from ultralytics import YOLO
+import torch
 
 
 # ─── Constants ────────────────────────────────────────────────────────────────
@@ -77,36 +78,17 @@ def reset_model() -> None:
         _model = None
 
 
-# ─── Detection ────────────────────────────────────────────────────────────────
+# ─── Post-processing ───────────────────
 
-def run_detection(
-    img_bgr:    np.ndarray,
-    model_path: str,
-    conf:       float,
-    iou:        float,
-    imgsz:      int,
-    keep_top1:  bool,
+def _postprocess_result(
+    res,                    # ultralytics.engine.results.Results
+    img_bgr: np.ndarray,
+    keep_top1: bool,
 ) -> tuple[np.ndarray, list[dict]]:
     """
-    Run YOLO inference on a BGR image.
-
-    Args:
-        img_bgr:    OpenCV BGR image.
-        model_path: Path to the ONNX/PT model weights.
-        conf:       Minimum detection confidence.
-        iou:        NMS IoU threshold.
-        imgsz:      Inference image size (must match training).
-        keep_top1:  When True, keep only the highest-confidence box per class.
-
-    Returns:
-        annotated:  BGR copy of img_bgr with boxes and labels drawn.
-        detections: List of {"class_id", "class_name", "conf", "box":[x1,y1,x2,y2]}.
+    Draw boxes/labels and extract detection list.
     """
-    model   = get_model(model_path)
-    results = model(img_bgr, imgsz=imgsz, conf=conf, iou=iou,
-                    agnostic_nms=False, verbose=False, device="cpu")
-    res     = results[0]
-    names   = res.names
+    names = res.names
 
     # Collect raw detections from the result tensor
     raw: list[dict] = [
@@ -118,7 +100,7 @@ def run_detection(
         for box in res.boxes
     ]
 
-    # Optionally suppress all but the best box per class
+    # Optionally keep only the highest-confidence box per class
     if keep_top1:
         top: dict[int, dict] = {}
         for b in raw:
@@ -156,7 +138,7 @@ def run_detection(
     return annotated, detections
 
 
-# ─── Veyon WebAPI helpers ──────────────────────────────────────────────────────
+# ─── Veyon WebAPI helpers ─────────────────────────────────────────────────────
 
 def is_port_open(host: str, port: int, timeout: float = 1.5) -> bool:
     """Return True if something is already listening on host:port."""
@@ -201,49 +183,6 @@ def discover_computers(veyon_cli: str) -> list[dict]:
     ]
 
 
-def authenticate(base_url: str, host: str, key_name: str, key_data: str) -> Optional[str]:
-    """Perform key-based auth against the WebAPI. Returns a connection-uid or None."""
-    try:
-        r = requests.post(
-            f"{base_url}/authentication/{host}",
-            json={
-                "method":      KEY_AUTH_UUID,
-                "credentials": {"keyname": key_name, "keydata": key_data},
-            },
-            timeout=10,
-        )
-        if r.status_code == 200:
-            return r.json().get("connection-uid")
-    except requests.RequestException:
-        pass
-    return None
-
-
-def grab_framebuffer(
-    base_url: str,
-    conn_uid: str,
-    fmt:      str,
-    quality:  int,
-    width:    int,
-) -> Optional[bytes]:
-    """Request a framebuffer snapshot. Returns raw image bytes or None on failure."""
-    params: dict = {"format": fmt, "quality": quality}
-    if width:
-        params["width"] = width
-    try:
-        r = requests.get(
-            f"{base_url}/framebuffer",
-            params=params,
-            headers={"Connection-Uid": conn_uid},
-            timeout=10,
-        )
-        if r.status_code == 200 and len(r.content) > 1000:
-            return r.content
-    except requests.RequestException:
-        pass
-    return None
-
-
 def decode_image(raw: bytes) -> Optional[np.ndarray]:
     """Decode JPEG/PNG bytes into an OpenCV BGR array."""
     arr = np.frombuffer(raw, dtype=np.uint8)
@@ -267,15 +206,23 @@ def save_image(
     return path
 
 
-# ─── Monitor controller ───────────────────────────────────────────────────────
+# ─── Monitor controller (REAL-TIME OPTIMIZED) ─────────────────────────────────
 
 class MonitorController:
     """
     Orchestrates WebAPI server lifecycle, computer discovery, and per-computer
-    worker threads.  All communication back to the GUI is via thread-safe queues:
+    worker threads.
 
-        log_q  — str messages  (one per line)
-        img_q  — (computer_name, annotated_bgr, detections) tuples
+    REAL-TIME OPTIMISATIONS:
+        • Single dedicated batch-detection thread
+        • Persistent HTTP sessions with connection reuse
+        • Automatic CUDA / CPU device selection
+        • Back-pressure queue (max 128 frames) with safe drop on overload
+        • No disk I/O in the hot detection path
+        • Short timeouts everywhere for low latency
+
+    All heavy CPU work is isolated to ONE thread → the other worker threads
+    stay almost idle (pure I/O).
     """
 
     def __init__(
@@ -291,6 +238,10 @@ class MonitorController:
         self._stop    = threading.Event()
         self._proc:   Optional[subprocess.Popen]  = None
         self._threads: list[threading.Thread]     = []
+
+        # Real-time core: raw images queue + single detection thread
+        self._raw_img_queue: queue.Queue[tuple[str, np.ndarray]] = queue.Queue(maxsize=128)
+        self._detection_thread: Optional[threading.Thread] = None
 
     # ── Public interface ──────────────────────────────────────────────────────
 
@@ -317,7 +268,7 @@ class MonitorController:
         self.log_q.put(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
     def _run(self) -> None:
-        """Main orchestration: key load → WebAPI → model → discovery → workers."""
+        """Main orchestration: key load → WebAPI → model → discovery → workers + detection engine."""
         cfg = self.cfg
 
         # Load the private key from disk
@@ -354,7 +305,7 @@ class MonitorController:
         else:
             self._log("Manual mode — ensure the WebAPI server is running externally")
 
-        # Pre-load the YOLO model on this thread so workers share one instance
+        # Pre-load the YOLO model (warm-up)
         self._log(f"Loading YOLO model: {cfg['model_path']}")
         try:
             get_model(cfg["model_path"])
@@ -381,7 +332,7 @@ class MonitorController:
 
         os.makedirs(cfg["output_dir"], exist_ok=True)
 
-        # Spawn one worker thread per discovered computer
+        # Spawn one lightweight I/O worker per discovered computer
         self._threads = []
         for c in computers:
             t = threading.Thread(
@@ -393,31 +344,46 @@ class MonitorController:
             self._threads.append(t)
             t.start()
 
+        # Start the SINGLE batched detection engine (the real-time heart)
+        self._detection_thread = threading.Thread(
+            target=self._detection_worker,
+            daemon=True,
+            name="yolo-batch-detector",
+        )
+        self._detection_thread.start()
+        self._log("🚀 Batched detection engine started (real-time core)")
+
         self._log(f"Polling every {cfg['interval']}s — press Stop to quit\n")
+
+    # ── Per-computer I/O worker (pure network + decode) ───────────────────────
 
     def _worker(self, name: str, host: str, key_data: str, base_url: str) -> None:
         """
-        Per-computer loop: authenticate → grab frame → detect → push results.
-        Automatically re-authenticates after connection failures.
+        One thread per computer – does ONLY network I/O and decode.
+        Detection is offloaded → this thread uses almost zero CPU.
+        Uses persistent session for maximum throughput.
         """
-        cfg      = self.cfg
+        cfg = self.cfg
+        session = requests.Session()
+        session.headers.update({"Connection": "keep-alive"})
+
         conn_uid: Optional[str] = None
 
         while not self._stop.is_set():
 
-            # (Re-)authenticate when we don't have a valid connection
+            # (Re-)authenticate when needed
             if conn_uid is None:
                 self._log(f"[{name}] Authenticating…")
-                conn_uid = authenticate(base_url, host, cfg["key_name"], key_data)
+                conn_uid = self._authenticate_with_session(session, base_url, host, cfg["key_name"], key_data)
                 if conn_uid is None:
                     self._log(f"[{name}] Auth failed — retrying in 10 s")
                     self._stop.wait(10)
                     continue
-                time.sleep(2)   # let VNC session stabilise before first frame
+                time.sleep(2)   # let VNC session stabilise
 
-            # Grab a framebuffer snapshot
-            raw = grab_framebuffer(
-                base_url, conn_uid,
+            # Grab framebuffer (fast, persistent connection)
+            raw = self._grab_framebuffer_with_session(
+                session, base_url, conn_uid,
                 cfg["img_fmt"], cfg["img_quality"], cfg["img_width"],
             )
             if raw is None:
@@ -431,41 +397,140 @@ class MonitorController:
                 self._stop.wait(cfg["interval"])
                 continue
 
-            # Optionally persist the raw (pre-detection) screenshot
+            # Optional raw save
             if cfg["save_raw"]:
                 save_image(cfg["output_dir"], name, img, "raw", cfg["img_fmt"])
 
-            # Run YOLO detection and measure latency
-            t0 = time.perf_counter()
-            annotated, detections = run_detection(
-                img,
-                cfg["model_path"],
-                cfg["detect_conf"],
-                cfg["detect_iou"],
-                cfg["detect_imgsz"],
-                cfg["keep_top1"],
-            )
-            elapsed_ms = (time.perf_counter() - t0) * 1000
-
-            # Console summary
-            if detections:
-                summary = ", ".join(
-                    f"{d['class_name']}({d['conf']:.0%})" for d in detections
-                )
-                self._log(f"[{name}] {len(detections)} det(s) in {elapsed_ms:.0f} ms → {summary}")
-            else:
-                self._log(f"[{name}] No detections ({elapsed_ms:.0f} ms)")
-
-            # Optionally save the annotated screenshot to disk
-            if cfg["save_annotated"]:
-                save_image(cfg["output_dir"], name, annotated, "det", cfg["img_fmt"])
-
-            # Push to the GUI image queue for live display
-            self.img_q.put((name, annotated, detections))
+            # Queue for batched detection (non-blocking with back-pressure)
+            try:
+                self._raw_img_queue.put((name, img), timeout=1.0)
+            except queue.Full:
+                self._log(f"[{name}] Detection queue full – dropping frame (backpressure)")
 
             self._stop.wait(cfg["interval"])
 
-        self._log(f"[{name}] Worker stopped")
+    # ── Session helpers (persistent, low-latency) ─────────────────────────────
+
+    def _authenticate_with_session(
+        self, session: requests.Session, base_url: str, host: str, key_name: str, key_data: str
+    ) -> Optional[str]:
+        """Perform key-based auth using persistent session."""
+        try:
+            r = session.post(
+                f"{base_url}/authentication/{host}",
+                json={
+                    "method":      KEY_AUTH_UUID,
+                    "credentials": {"keyname": key_name, "keydata": key_data},
+                },
+                timeout=5,
+            )
+            if r.status_code == 200:
+                return r.json().get("connection-uid")
+        except requests.RequestException:
+            pass
+        return None
+
+    def _grab_framebuffer_with_session(
+        self,
+        session: requests.Session,
+        base_url: str,
+        conn_uid: str,
+        fmt: str,
+        quality: int,
+        width: int,
+    ) -> Optional[bytes]:
+        """Request framebuffer using persistent session."""
+        params: dict = {"format": fmt, "quality": quality}
+        if width:
+            params["width"] = width
+        try:
+            r = session.get(
+                f"{base_url}/framebuffer",
+                params=params,
+                headers={"Connection-Uid": conn_uid},
+                timeout=5,
+            )
+            if r.status_code == 200 and len(r.content) > 1000:
+                return r.content
+        except requests.RequestException:
+            pass
+        return None
+
+    # ── SINGLE BATCHED DETECTION THREAD ────────
+
+    def _detection_worker(self) -> None:
+        """
+        Thread for handling YOLO inference.
+
+        Uses GPU if it is available, if not - CPU
+        """
+        cfg = self.cfg
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        MAX_BATCH = 16
+
+        if device == "cuda":
+            MAX_BATCH = 32
+
+        self._log(f"🚀 Detection engine using device: {device} | max batch size: {MAX_BATCH}")
+
+        model = get_model(cfg["model_path"])
+
+        while not self._stop.is_set():
+            batch_imgs: list[np.ndarray] = []
+            batch_names: list[str] = []
+
+            # Collect batch (quick timeout for responsiveness)
+            try:
+                while len(batch_imgs) < MAX_BATCH:
+                    name, img = self._raw_img_queue.get(timeout=0.05)
+                    batch_imgs.append(img)
+                    batch_names.append(name)
+            except queue.Empty:
+                if not batch_imgs:
+                    continue
+
+            # ── BATCH INFERENCE ──────────────────────────────────────────────
+            try:
+                t0 = time.perf_counter()
+                results = model(
+                    batch_imgs,
+                    imgsz=cfg["detect_imgsz"],
+                    conf=cfg["detect_conf"],
+                    iou=cfg["detect_iou"],
+                    agnostic_nms=False,
+                    verbose=False,
+                    device=device,
+                    rect=True,
+                )
+                inference_ms = (time.perf_counter() - t0) * 1000
+                avg_ms = inference_ms / len(batch_imgs)
+
+                # Post-process every image in the batch
+                for name, res, img_bgr in zip(batch_names, results, batch_imgs):
+                    annotated, detections = _postprocess_result(
+                        res, img_bgr, cfg["keep_top1"]
+                    )
+
+                    # Optional annotated save
+                    if cfg["save_annotated"]:
+                        save_image(cfg["output_dir"], name, annotated, "det", cfg["img_fmt"])
+
+                    # Push to GUI queue for live preview
+                    self.img_q.put((name, annotated, detections))
+
+                    # Console summary
+                    if detections:
+                        summary = ", ".join(
+                            f"{d['class_name']}({d['conf']:.0%})" for d in detections
+                        )
+                        self._log(f"[{name}] {len(detections)} det(s) in {avg_ms:.0f} ms → {summary}")
+                    else:
+                        self._log(f"[{name}] No detections ({avg_ms:.0f} ms)")
+
+            except Exception as e:
+                self._log(f"❌ Batch detection error: {e}")
 
 
 # ─── Tkinter GUI ──────────────────────────────────────────────────────────────
@@ -491,7 +556,7 @@ class App(tk.Tk):
         "interval":      "1",
         "img_fmt":       "jpeg",
         "img_quality":   "85",
-        "img_width":     "1280",
+        "img_width":     "480",
         "model_path":    "ONNX_FP32.onnx",
         "detect_conf":   "0.40",
         "detect_iou":    "0.20",
@@ -689,11 +754,11 @@ class App(tk.Tk):
     def _append_log(self, msg: str) -> None:
         """Colour-code and append a message to the console widget."""
         low = msg.lower()
-        if any(k in low for k in ("✅", "loaded", "online", "ready", "model ready")):
+        if any(k in low for k in ("✅", "loaded", "online", "ready", "model ready", "🚀")):
             tag = "ok"
         elif any(k in low for k in ("❌", "error", "failed", "cannot")):
             tag = "err"
-        elif any(k in low for k in ("⚠️", "warn", "timeout", "retry")):
+        elif any(k in low for k in ("⚠️", "warn", "timeout", "retry", "full")):
             tag = "warn"
         else:
             tag = "info"

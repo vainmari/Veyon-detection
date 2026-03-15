@@ -1,0 +1,297 @@
+"""
+tests/test_database.py
+──────────────────────
+Unit tests for app/db/database.py.
+Each test gets a fresh isolated DB via the autouse `db` fixture.
+
+Run:  pytest tests/test_database.py -v
+"""
+from __future__ import annotations
+import sqlite3
+import pytest
+
+
+# ── Fixture ───────────────────────────────────────────────────────────────────
+
+@pytest.fixture(autouse=True)
+def db(tmp_path, monkeypatch):
+    import app.db.database as m
+    monkeypatch.setattr(m, "DB_PATH", tmp_path / "test.db")
+    m.init_db()
+    m.seed_classes()
+    return m
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _teacher(db, name="admin"):
+    db.create_user(name, "pw", "teacher")
+    return db.get_user_by_username(name)
+
+def _student(db, name="jonas", created_by=None):
+    db.create_user(name, "pw", "student", created_by_id=created_by)
+    return db.get_user_by_username(name)
+
+def _computer(db, name="PC-01", host="10.0.0.1"):
+    return db.upsert_computer(name, host)
+
+DETS = [
+    {"class_id": 0, "class_name": "DI",       "conf": 0.92, "box": [0, 0, 10, 10]},
+    {"class_id": 2, "class_name": "Narsykle",  "conf": 0.85, "box": [5, 5, 50, 50]},
+]
+
+
+# ── Schema ────────────────────────────────────────────────────────────────────
+
+class TestSchema:
+    def test_all_tables_exist(self, db):
+        with sqlite3.connect(db.DB_PATH) as c:
+            tables = {r[0] for r in c.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )}
+        assert {"computer","user","detection_class",
+                "detection_event","detection"}.issubset(tables)
+
+    def test_detection_event_has_windows_username_col(self, db):
+        with sqlite3.connect(db.DB_PATH) as c:
+            cols = {r[1] for r in c.execute(
+                "PRAGMA table_info(detection_event)"
+            )}
+        assert "windows_username" in cols
+
+    def test_seed_classes_count(self, db):
+        assert len(db.list_classes()) == 7
+
+    def test_seed_idempotent(self, db):
+        db.seed_classes()
+        assert len(db.list_classes()) == 7
+
+    def test_default_teacher(self, db):
+        db.ensure_default_teacher("admin", "admin")
+        u = db.get_user_by_username("admin")
+        assert u and u["role"] == "teacher"
+
+    def test_default_teacher_no_duplicate(self, db):
+        db.ensure_default_teacher()
+        db.ensure_default_teacher()
+        with sqlite3.connect(db.DB_PATH) as c:
+            assert c.execute("SELECT COUNT(*) FROM user").fetchone()[0] == 1
+
+    def test_migration_safe_on_existing_db(self, db):
+        """Running init_db a second time must not crash on an existing schema."""
+        db.init_db()   # idempotent
+        assert len(db.list_classes()) == 7
+
+
+# ── Users ─────────────────────────────────────────────────────────────────────
+
+class TestUsers:
+    def test_create_and_retrieve(self, db):
+        uid = db.create_user("bob", "pw", "student")
+        u = db.get_user_by_id(uid)
+        assert u["username"] == "bob" and u["role"] == "student"
+
+    def test_duplicate_raises(self, db):
+        db.create_user("alice", "pw", "student")
+        with pytest.raises(Exception):
+            db.create_user("alice", "pw2", "student")
+
+    def test_verify_correct(self, db):
+        db.create_user("carol", "secret", "teacher")
+        assert db.verify_password("carol", "secret") is not None
+
+    def test_verify_wrong(self, db):
+        db.create_user("dave", "right", "student")
+        assert db.verify_password("dave", "wrong") is None
+
+    def test_verify_unknown(self, db):
+        assert db.verify_password("ghost", "pw") is None
+
+    def test_update_password(self, db):
+        db.create_user("eve", "old", "student")
+        uid = db.get_user_by_username("eve")["id"]
+        db.update_password(uid, "new")
+        assert db.verify_password("eve", "new")
+        assert not db.verify_password("eve", "old")
+
+    def test_delete_user(self, db):
+        db.create_user("frank", "pw", "student")
+        uid = db.get_user_by_username("frank")["id"]
+        db.delete_user(uid)
+        assert db.get_user_by_username("frank") is None
+
+    def test_list_users(self, db):
+        db.create_user("u1", "pw", "teacher")
+        db.create_user("u2", "pw", "student")
+        names = {u["username"] for u in db.list_users()}
+        assert {"u1", "u2"} == names
+
+    def test_created_by_stored(self, db):
+        t = _teacher(db)
+        db.create_user("pupil", "pw", "student", created_by_id=t["id"])
+        u = db.get_user_by_username("pupil")
+        assert u["created_by"] == t["id"]
+
+
+# ── Computers ─────────────────────────────────────────────────────────────────
+
+class TestComputers:
+    def test_upsert_returns_id(self, db):
+        cid = _computer(db)
+        assert isinstance(cid, int)
+
+    def test_upsert_idempotent(self, db):
+        assert _computer(db) == _computer(db)
+
+    def test_list(self, db):
+        db.upsert_computer("A", "1.1.1.1")
+        db.upsert_computer("B", "1.1.1.2")
+        names = {c["name"] for c in db.list_computers()}
+        assert {"A","B"} == names
+
+
+# ── Detection events ──────────────────────────────────────────────────────────
+
+class TestDetectionEvents:
+    def test_insert_with_detections(self, db):
+        cid = _computer(db)
+        db.insert_event(cid, DETS)
+        rows = db.query_events(computer_id=cid)
+        assert len(rows) == 1 and rows[0]["had_detection"] == 1
+
+    def test_insert_empty_detections(self, db):
+        cid = _computer(db)
+        db.insert_event(cid, [])
+        rows = db.query_events(computer_id=cid)
+        assert len(rows) == 1 and rows[0]["had_detection"] == 0
+
+    def test_windows_username_stored(self, db):
+        cid = _computer(db)
+        db.insert_event(cid, [], windows_username="Jonas")
+        with sqlite3.connect(db.DB_PATH) as c:
+            row = c.execute(
+                "SELECT windows_username FROM detection_event"
+            ).fetchone()
+        assert row[0] == "Jonas"
+
+    def test_windows_username_shown_when_no_account(self, db):
+        cid = _computer(db)
+        db.insert_event(cid, DETS, windows_username="Jonas")
+        rows = db.query_events(computer_id=cid)
+        # No user account — student column should show the Windows username
+        assert rows[0]["student"] == "Jonas"
+
+    def test_frame_blob_round_trip(self, db):
+        cid   = _computer(db)
+        frame = b"\xff\xd8\xff" + b"\xaa" * 50
+        eid   = db.insert_event(cid, [], frame_bytes=frame)
+        b64   = db.get_event_frame_b64(eid)
+        assert b64 and b64.startswith("data:image/jpeg;base64,")
+
+    def test_no_blob_returns_none(self, db):
+        cid = _computer(db)
+        eid = db.insert_event(cid, [])
+        assert db.get_event_frame_b64(eid) is None
+
+    def test_user_linked_when_provided(self, db):
+        cid = _computer(db)
+        s   = _student(db)
+        db.insert_event(cid, DETS, user_id=s["id"])
+        rows = db.query_events(user_id=s["id"])
+        assert len(rows) == 1 and rows[0]["student"] == "jonas"
+
+    def test_results_ordered_desc(self, db):
+        cid = _computer(db)
+        for _ in range(3):
+            db.insert_event(cid, [])
+        times = [r["detected_at"] for r in db.query_events(computer_id=cid)]
+        assert times == sorted(times, reverse=True)
+
+
+# ── Query filters ─────────────────────────────────────────────────────────────
+
+class TestQueryFilters:
+    def _setup(self, db):
+        c1 = db.upsert_computer("PC-01","10.0.0.1")
+        c2 = db.upsert_computer("PC-02","10.0.0.2")
+        s  = _student(db)
+        db.insert_event(c1, DETS, user_id=s["id"], windows_username="jonas")
+        db.insert_event(c1, [])
+        db.insert_event(c2, DETS)
+        return c1, c2, s
+
+    def test_by_computer(self, db):
+        c1,_,_ = self._setup(db)
+        assert all(r["computer"]=="PC-01" for r in db.query_events(computer_id=c1))
+
+    def test_by_user(self, db):
+        _,_,s = self._setup(db)
+        rows = db.query_events(user_id=s["id"])
+        assert len(rows)==1 and rows[0]["student"]=="jonas"
+
+    def test_only_hits(self, db):
+        c1,_,_ = self._setup(db)
+        rows = db.query_events(computer_id=c1, only_hits=True)
+        assert len(rows)==1 and rows[0]["had_detection"]==1
+
+    def test_by_class_name(self, db):
+        c1,_,_ = self._setup(db)
+        assert len(db.query_events(computer_id=c1, class_name="DI")) == 1
+
+    def test_limit(self, db):
+        cid = _computer(db)
+        for _ in range(10):
+            db.insert_event(cid, [])
+        assert len(db.query_events(computer_id=cid, limit=4)) == 4
+
+
+# ── Auto-assign on account creation ──────────────────────────────────────────
+
+class TestAutoAssign:
+    def test_events_assigned_on_user_creation(self, db):
+        cid = _computer(db)
+        # Log 3 events before the account exists
+        for _ in range(3):
+            db.insert_event(cid, DETS, windows_username="Jonas")
+        # Create account — should auto-assign all three
+        db.create_user("Jonas", "pw", "student")
+        uid  = db.get_user_by_username("Jonas")["id"]
+        rows = db.query_events(user_id=uid)
+        assert len(rows) == 3
+
+    def test_case_insensitive_match(self, db):
+        cid = _computer(db)
+        db.insert_event(cid, [], windows_username="JONAS")
+        db.create_user("jonas", "pw", "student")
+        uid  = db.get_user_by_username("jonas")["id"]
+        rows = db.query_events(user_id=uid)
+        assert len(rows) == 1
+
+    def test_already_assigned_not_touched(self, db):
+        cid   = _computer(db)
+        other = _student(db, "other")
+        # One event already assigned to 'other', one anonymous for 'Jonas'
+        db.insert_event(cid, [], user_id=other["id"], windows_username="other")
+        db.insert_event(cid, [], windows_username="Jonas")
+        db.create_user("Jonas", "pw", "student")
+        uid  = db.get_user_by_username("Jonas")["id"]
+        assert len(db.query_events(user_id=uid)) == 1
+
+    def test_no_matching_events_is_fine(self, db):
+        """Creating a user with no prior events should not raise."""
+        uid = db.create_user("newbie", "pw", "student")
+        assert isinstance(uid, int)
+
+    def test_count_anonymous_events(self, db):
+        cid = _computer(db)
+        db.insert_event(cid, [])
+        db.insert_event(cid, [])
+        assert db.count_anonymous_events(cid) == 2
+
+    def test_manual_assign(self, db):
+        cid = _computer(db)
+        s   = _student(db)
+        db.insert_event(cid, [])
+        db.insert_event(cid, [])
+        n = db.assign_anonymous_events(s["id"], cid)
+        assert n == 2 and db.count_anonymous_events(cid) == 0

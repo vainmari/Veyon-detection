@@ -1,10 +1,14 @@
 """
 app/services/monitor_service.py
 ────────────────────────────────
-MonitorController  — orchestrates per-computer I/O threads + single YOLO thread.
-drain_worker       — background thread that drains queues into global state + DB.
+MonitorController  — per-computer I/O threads + single YOLO batch thread.
+drain_worker       — drains queues into global state (no DB writes here).
+
+DB writes happen inside the detect worker so each frame → event is atomic.
+Frames are stored as JPEG BLOBs directly in the database (no disk I/O).
 """
 from __future__ import annotations
+
 import queue
 import threading
 import time
@@ -12,14 +16,24 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import cv2
 import requests
 import torch
 
 import app.state as state
 from app.core import veyon, yolo
-from app.core.imaging import postprocess, img_to_b64, save_image
+from app.core.imaging import postprocess, img_to_b64
 from app.core.veyon import WEBAPI_BASE_TPL
-from app.db.database import insert_detection
+from app.db.database import (
+    get_user_by_username,
+    insert_event,
+    upsert_computer,
+)
+
+
+def _parse_win_username(raw: str) -> str:
+    """Strip 'COMPUTER\\' prefix: 'LV_laptop\\Lina' → 'Lina'."""
+    return raw.split("\\")[-1].strip()
 
 
 class MonitorController:
@@ -28,7 +42,9 @@ class MonitorController:
         self.cfg    = cfg
         self._stop  = threading.Event()
         self._proc: Optional[object] = None
-        self._raw_q: queue.Queue = queue.Queue(maxsize=128)
+        self._raw_q: queue.Queue[tuple[str, bytes]] = queue.Queue(maxsize=128)
+        # raw_q carries (computer_name, raw_jpeg_bytes) —
+        # decoded in the detect worker to keep IO threads lightweight
 
     # ── Public ────────────────────────────────────────────────────────────────
 
@@ -43,7 +59,7 @@ class MonitorController:
             except Exception: self._proc.kill()
             self._proc = None
 
-    # ── Helpers ───────────────────────────────────────────────────────────────
+    # ── Logging ───────────────────────────────────────────────────────────────
 
     def _log(self, msg: str) -> None:
         state.log_q.put(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
@@ -52,7 +68,6 @@ class MonitorController:
 
     def _run(self) -> None:
         cfg = self.cfg
-
         try:
             key_data = Path(cfg["key_path"]).read_text(encoding="utf-8").strip()
         except OSError as e:
@@ -60,7 +75,6 @@ class MonitorController:
 
         base_url = WEBAPI_BASE_TPL.format(host=cfg["host"], port=cfg["port"])
 
-        # Optionally auto-start the Veyon WebAPI server
         if cfg["auto_start"]:
             if veyon.is_port_open(cfg["host"], cfg["port"]):
                 self._log("✅ WebAPI already running")
@@ -68,8 +82,7 @@ class MonitorController:
                 self._log("🚀 Launching Veyon WebAPI server…")
                 proc = veyon.launch_webapi_server(cfg["veyon_cli"])
                 if not proc:
-                    self._log("❌ Failed to launch veyon-cli — check path in Settings")
-                    return
+                    self._log("❌ Failed to launch veyon-cli — check path in Settings"); return
                 self._proc = proc
                 for _ in range(cfg["start_wait"]):
                     if self._stop.is_set(): return
@@ -79,7 +92,6 @@ class MonitorController:
                 else:
                     self._log("⚠️  WebAPI not responding — check Veyon logs")
 
-        # Pre-load the YOLO model
         self._log(f"Loading model: {cfg['model_path']}")
         try:
             yolo.get_model(cfg["model_path"])
@@ -87,7 +99,6 @@ class MonitorController:
         except Exception as e:
             self._log(f"❌ Model load failed: {e}"); return
 
-        # Discover computers
         self._log("Discovering computers…")
         try:
             computers = veyon.discover_computers(cfg["veyon_cli"])
@@ -100,10 +111,10 @@ class MonitorController:
         self._log(f"Found {len(computers)} computer(s):")
         for c in computers:
             self._log(f"  • {c['name']}  ({c['host']})")
+            # Register computer in DB and cache its id immediately
+            cid = upsert_computer(c["name"], c["host"])
+            state.computer_ids[c["name"]] = cid
 
-        import os; os.makedirs(cfg["output_dir"], exist_ok=True)
-
-        # One lightweight I/O thread per computer
         for c in computers:
             threading.Thread(
                 target=self._io_worker,
@@ -111,7 +122,6 @@ class MonitorController:
                 daemon=True, name=f"io-{c['host']}",
             ).start()
 
-        # Single batched YOLO thread
         threading.Thread(
             target=self._detect_worker, daemon=True, name="yolo"
         ).start()
@@ -120,6 +130,11 @@ class MonitorController:
     # ── Per-computer I/O worker ───────────────────────────────────────────────
 
     def _io_worker(self, name: str, host: str, key_data: str, base_url: str) -> None:
+        """
+        Pure network thread: authenticate, grab framebuffer, fetch logged-in
+        Windows username, push raw JPEG bytes onto _raw_q.
+        No decoding or inference happens here.
+        """
         cfg     = self.cfg
         session = requests.Session()
         session.headers["Connection"] = "keep-alive"
@@ -137,6 +152,8 @@ class MonitorController:
                     self._stop.wait(10); continue
                 time.sleep(2)
 
+            # Grab framebuffer FIRST — user fetch comes after so it
+            # cannot interfere with the VNC session on the same connection.
             raw = veyon.grab_framebuffer(
                 session, base_url, conn_uid,
                 cfg["img_fmt"], cfg["img_quality"], cfg["img_width"],
@@ -145,17 +162,27 @@ class MonitorController:
                 self._log(f"[{name}] Framebuffer failed — re-authenticating")
                 conn_uid = None; continue
 
-            img = veyon.decode_image(raw)
-            if img is None:
-                self._stop.wait(float(cfg["interval"])); continue
-
-            if cfg["save_raw"]:
-                save_image(cfg["output_dir"], name, img, "raw", cfg["img_fmt"])
+            # Now safely fetch the logged-in Windows username.
+            # Parse "COMPUTER\username" → "username"
+            win_login_raw = veyon.get_logged_user(session, base_url, conn_uid)
+            if win_login_raw:
+                win_login = _parse_win_username(win_login_raw)
+                db_user   = get_user_by_username(win_login)
+                state.computer_users[name]         = db_user["id"] if db_user else None
+                state.computer_win_usernames[name] = win_login
+                if not db_user:
+                    self._log(
+                        f"[{name}] Windows user '{win_login}' — "
+                        f"no system account yet (events logged with username)"
+                    )
+            else:
+                state.computer_users[name]         = None
+                state.computer_win_usernames[name] = None
 
             try:
-                self._raw_q.put((name, img), timeout=1.0)
+                self._raw_q.put((name, raw), timeout=1.0)
             except queue.Full:
-                pass   # back-pressure: silently drop frame
+                pass  # back-pressure: drop frame
 
             self._stop.wait(float(cfg["interval"]))
 
@@ -169,14 +196,29 @@ class MonitorController:
         model = yolo.get_model(cfg["model_path"])
 
         while not self._stop.is_set():
-            imgs:  list = []
-            names: list = []
+            raw_batch:  list[bytes] = []
+            name_batch: list[str]   = []
+
             try:
-                while len(imgs) < max_b:
-                    n, img = self._raw_q.get(timeout=0.05)
-                    imgs.append(img); names.append(n)
+                while len(raw_batch) < max_b:
+                    n, raw = self._raw_q.get(timeout=0.05)
+                    raw_batch.append(raw); name_batch.append(n)
             except queue.Empty:
-                if not imgs: continue
+                if not raw_batch: continue
+
+            # Decode all images in batch
+            imgs = []
+            valid_names = []
+            valid_raws  = []
+            for n, raw in zip(name_batch, raw_batch):
+                img = veyon.decode_image(raw)
+                if img is not None:
+                    imgs.append(img)
+                    valid_names.append(n)
+                    valid_raws.append(raw)
+
+            if not imgs:
+                continue
 
             try:
                 results = model(
@@ -186,16 +228,44 @@ class MonitorController:
                     iou=float(cfg["detect_iou"]),
                     verbose=False, device=device, rect=True,
                 )
-                for name, res, img_bgr in zip(names, results, imgs):
-                    annotated, dets = postprocess(res, img_bgr, bool(cfg["keep_top1"]))
-                    if cfg["save_annotated"]:
-                        save_image(cfg["output_dir"], name, annotated, "det", cfg["img_fmt"])
+
+                for name, res, img_bgr in zip(valid_names, results, imgs):
+                    annotated, dets = postprocess(
+                        res, img_bgr, bool(cfg["keep_top1"])
+                    )
+
+                    # Encode annotated frame as JPEG for DB storage
+                    ok, buf = cv2.imencode(
+                        ".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 75]
+                    )
+                    frame_bytes = buf.tobytes() if ok else None
+
+                    # Write event + detections to DB
+                    computer_id = state.computer_ids.get(name)
+                    user_id     = state.computer_users.get(name)
+                    win_uname   = state.computer_win_usernames.get(name)
+                    if computer_id is not None:
+                        insert_event(
+                            computer_id,
+                            dets,
+                            user_id=user_id,
+                            windows_username=win_uname,
+                            frame_bytes=frame_bytes,
+                        )
+
+                    # Push to live preview queue
                     state.img_q.put((name, annotated, dets))
+
                     if dets:
                         self._log(
                             f"[{name}] " +
-                            ", ".join(f"{d['class_name']}({d['conf']:.0%})" for d in dets)
+                            ", ".join(
+                                f"{d['class_name']}({d['conf']:.0%})" for d in dets
+                            )
                         )
+                    else:
+                        self._log(f"[{name}] no detections")
+
             except Exception as e:
                 self._log(f"❌ Detection error: {e}")
 
@@ -204,12 +274,10 @@ class MonitorController:
 
 def drain_worker() -> None:
     """
-    Runs forever in a daemon thread (started once in app startup).
-    Drains log_q and img_q → updates state globals + writes to DB.
-    UI timers only READ state → no queue contention between browser tabs.
+    Daemon thread — drains log_q and img_q into global state.
+    DB writes are done in the detect worker, not here.
     """
     while True:
-        # Drain log messages
         try:
             while True:
                 msg = state.log_q.get_nowait()
@@ -219,12 +287,9 @@ def drain_worker() -> None:
         except queue.Empty:
             pass
 
-        # Drain detection results
         try:
             while True:
                 name, img_bgr, dets = state.img_q.get_nowait()
-                for d in dets:
-                    insert_detection(name, d)
                 state.latest_frames[name] = (img_to_b64(img_bgr), dets)
         except queue.Empty:
             pass

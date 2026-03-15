@@ -1,7 +1,14 @@
 # Ignore private keys and certificates
 *.pem
+*.env
 
 # Ignore common image formats
 *.jpg
 *.jpeg
 *.png
+
+# Ignore DB
+*.db
+
+# Ignore Python compiled files
+*.pyc

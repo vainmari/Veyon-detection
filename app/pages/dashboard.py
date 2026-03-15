@@ -1,16 +1,14 @@
 """
 app/pages/dashboard.py
 ──────────────────────
-Dashboard page  /
-  • Start / Stop monitor
-  • Live annotated preview (full image, no crop)
-  • Per-computer dropdown
-  • Scrolling console log
+Dashboard page  /   (teacher only)
+Live annotated preview + console log + Start/Stop.
 """
 from nicegui import ui
 
 import app.state as state
 from app.config import collect_cfg
+from app.core.auth import require_auth
 from app.core.yolo import reset_model
 from app.pages._nav import nav
 from app.services.monitor_service import MonitorController
@@ -18,7 +16,10 @@ from app.services.monitor_service import MonitorController
 
 @ui.page("/")
 def page_dashboard() -> None:
-    nav()
+    current = require_auth(required_role="teacher")
+    if current is None:
+        return
+    nav(current)
 
     with ui.row().classes("w-full gap-4 p-4 items-start flex-nowrap"):
 
@@ -49,19 +50,25 @@ def page_dashboard() -> None:
                             value=next(iter(state.latest_frames), None),
                         ).props("dense outlined").classes("w-48")
 
-            # Live image — fills full width, natural height (no crop)
+            # Live image — full width, natural height, no crop
             with ui.card().classes("w-full"):
                 ui.label("Live Preview").classes("text-xs text-gray-400 mb-1")
                 live_img = ui.image("").classes("w-full rounded").style(
                     "background:#111; display:block;"
                 )
 
-            # Detection summary
+            # Active student indicator
             with ui.card().classes("w-full"):
-                ui.label("Last Detections").classes("text-xs text-gray-400 mb-1")
-                det_info = ui.label("— no detections —").classes(
-                    "font-mono text-sm text-blue-300"
-                )
+                with ui.row().classes("items-center gap-4"):
+                    with ui.column().classes("gap-0"):
+                        ui.label("Active Student").classes("text-xs text-gray-400")
+                        student_lbl = ui.label("—").classes(
+                            "font-mono text-sm text-yellow-300")
+                    ui.separator().props("vertical")
+                    with ui.column().classes("gap-0"):
+                        ui.label("Last Detections").classes("text-xs text-gray-400")
+                        det_info = ui.label("— no detections —").classes(
+                            "font-mono text-sm text-blue-300")
 
         # ── Right column: console ─────────────────────────────────────────────
         with ui.card().classes("w-80 flex-shrink-0"):
@@ -78,7 +85,6 @@ def page_dashboard() -> None:
                 "w-full font-mono text-xs bg-gray-950 text-green-300 rounded"
             ).style("height: 560px;")
 
-    # Per-tab state
     log_offset = [0]
 
     # ── Button handlers ───────────────────────────────────────────────────────
@@ -110,16 +116,14 @@ def page_dashboard() -> None:
     btn_start.on_click(do_start)
     btn_stop.on_click(do_stop)
 
-    # ── 100 ms UI refresh timer ───────────────────────────────────────────────
+    # ── 100 ms UI refresh ─────────────────────────────────────────────────────
 
     def tick() -> None:
-        # Push new log lines to this tab's log widget
         new = state.log_buffer[log_offset[0]:]
         for msg in new:
             log_view.push(msg)
         log_offset[0] = len(state.log_buffer)
 
-        # Sync dropdown with discovered computers
         opts = list(state.latest_frames.keys())
         if sorted(opts) != sorted(list(pc_sel.options or [])):
             pc_sel.options = opts
@@ -127,11 +131,20 @@ def page_dashboard() -> None:
             if pc_sel.value is None and opts:
                 pc_sel.set_value(opts[0])
 
-        # Render selected computer's latest frame
         sel = pc_sel.value
         if sel and sel in state.latest_frames:
             b64, dets = state.latest_frames[sel]
             live_img.set_source(b64)
+
+            # Show active student for selected computer
+            uid = state.computer_users.get(sel)
+            if uid:
+                from app.db.database import get_user_by_id
+                u = get_user_by_id(uid)
+                student_lbl.set_text(u["username"] if u else "—")
+            else:
+                student_lbl.set_text("— not matched —")
+
             det_info.set_text(
                 "  |  ".join(f"{d['class_name']} {d['conf']:.0%}" for d in dets)
                 if dets else "— no detections —"

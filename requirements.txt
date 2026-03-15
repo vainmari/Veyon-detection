@@ -1,8 +1,11 @@
 nicegui>=1.4
-uvicorn[standard]>=0.29
 requests>=2.31
 ultralytics>=8.2
 opencv-python-headless>=4.9
 Pillow>=10.3
 numpy>=1.26
 torch>=2.2
+onnx>=1.16
+onnxruntime>=1.18
+bcrypt>=4.0
+pytest>=9.0

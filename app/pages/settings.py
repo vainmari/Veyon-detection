@@ -7,12 +7,16 @@ Values are persisted via NiceGUI's app.storage.general (JSON file).
 from nicegui import ui
 
 from app.config import get_settings, save_settings
+from app.core.auth import require_auth
 from app.pages._nav import nav
 
 
 @ui.page("/settings")
 def page_settings() -> None:
-    nav()
+    current = require_auth(required_role="teacher")
+    if current is None:
+        return
+    nav(current)
     s = get_settings()
     widgets: dict[str, ui.element] = {}
 

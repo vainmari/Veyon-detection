@@ -104,6 +104,32 @@ def grab_framebuffer(
     return None
 
 
+def get_logged_user(
+    session:  requests.Session,
+    base_url: str,
+    conn_uid: str,
+) -> Optional[str]:
+    """
+    Return the Windows login name of the user currently active on the
+    monitored computer, or None if unavailable.
+    Veyon WebAPI endpoint: GET /user  → {"login": "...", "fullName": "..."}
+    """
+    try:
+        r = session.get(
+            f"{base_url}/user",
+            headers={"Connection-Uid": conn_uid},
+            timeout=3,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            return data.get("login") or data.get("name") or None
+    except requests.RequestException:
+        pass
+    return None
+
+
 def decode_image(raw: bytes) -> Optional[np.ndarray]:
+    if not raw:
+        return None
     arr = np.frombuffer(raw, dtype=np.uint8)
     return cv2.imdecode(arr, cv2.IMREAD_COLOR)

@@ -20,7 +20,14 @@ monitor: Optional["MonitorController"] = None
 log_q: queue.Queue[str]                               = queue.Queue()
 img_q: queue.Queue[tuple[str, np.ndarray, list]]      = queue.Queue()
 
-# Written by the drain worker, read by UI timers (no queue contention)
-latest_frames: dict[str, tuple[str, list]] = {}   # name → (b64_jpeg, detections)
-log_buffer:    list[str]                   = []   # rolling history, capped below
+# Written by drain worker / IO workers; read by UI timers
+latest_frames:  dict[str, tuple[str, list]] = {}   # name → (b64_jpeg, detections)
+log_buffer:     list[str]                   = []   # rolling history
 LOG_CAP = 500
+
+# computer name → DB id (populated by IO worker on first auth)
+computer_ids:          dict[str, int]              = {}
+# computer name → DB user_id of currently logged-in student (None = unknown/unmatched)
+computer_users:        dict[str, Optional[int]]    = {}
+# computer name → raw parsed Windows username string — always set
+computer_win_usernames: dict[str, Optional[str]]   = {}

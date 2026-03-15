@@ -24,7 +24,9 @@ import app.state as state
 from app.core import veyon, yolo
 from app.core.imaging import postprocess, img_to_b64
 from app.core.veyon import WEBAPI_BASE_TPL
+from app.services import alert_service
 from app.db.database import (
+    get_user_by_id,
     get_user_by_username,
     insert_event,
     upsert_computer,
@@ -32,7 +34,7 @@ from app.db.database import (
 
 
 def _parse_win_username(raw: str) -> str:
-    """Strip 'COMPUTER\\' prefix: 'LV_laptop\\Lina' → 'Lina'."""
+    """Strip 'COMPUTER\\' prefix: 'JP_laptop\\Jonas' → 'Jonas'."""
     return raw.split("\\")[-1].strip()
 
 
@@ -245,13 +247,27 @@ class MonitorController:
                     user_id     = state.computer_users.get(name)
                     win_uname   = state.computer_win_usernames.get(name)
                     if computer_id is not None:
-                        insert_event(
-                            computer_id,
-                            dets,
+                        ev_id = insert_event(
+                            computer_id, dets,
                             user_id=user_id,
                             windows_username=win_uname,
                             frame_bytes=frame_bytes,
                         )
+                        # Resolve student display name for notifications
+                        student_disp = win_uname or "—"
+                        if user_id:
+                            u = get_user_by_id(user_id)
+                            if u:
+                                student_disp = u["username"]
+                        # Fire alert notifications for prohibited classes
+                        n_fired = alert_service.check_and_fire(
+                            ev_id, dets, name, student_disp
+                        )
+                        if n_fired:
+                            self._log(
+                                f"[{name}] 🔔 {n_fired} alert(s) fired "
+                                f"({student_disp})"
+                            )
 
                     # Push to live preview queue
                     state.img_q.put((name, annotated, dets))

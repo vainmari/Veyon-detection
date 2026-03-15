@@ -7,7 +7,7 @@ Schema
   user              — teacher/admin or student accounts
   detection_class   — YOLO class registry
   detection_event   — one row per captured frame; always logged even with no detections.
-                      windows_username stores the raw OS login so events
+                      windows_username stores the raw OS login (e.g. "Lina") so events
                       can be matched retroactively when an account is later created.
   detection         — one row per bounding box inside an event
 """
@@ -95,6 +95,27 @@ def init_db() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_det_event ON detection(event_id);
             CREATE INDEX IF NOT EXISTS idx_det_class ON detection(class_id);
+            CREATE TABLE IF NOT EXISTS alert_rule (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                class_id   INTEGER NOT NULL UNIQUE
+                               REFERENCES detection_class(id) ON DELETE CASCADE,
+                enabled    INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT    NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS notification (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id    INTEGER REFERENCES detection_event(id) ON DELETE SET NULL,
+                class_name  TEXT    NOT NULL,
+                class_color TEXT    NOT NULL DEFAULT '#888888',
+                computer    TEXT    NOT NULL,
+                student     TEXT    NOT NULL,
+                is_read     INTEGER NOT NULL DEFAULT 0,
+                created_at  TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_notif_read ON notification(is_read);
+            CREATE INDEX IF NOT EXISTS idx_notif_time ON notification(created_at);
+
         """)
         c.commit()
 
@@ -366,7 +387,223 @@ def assign_anonymous_events(user_id: int, computer_id: int) -> int:
         return cur.rowcount
 
 
-# ── Query ─────────────────────────────────────────────────────────────────────
+# ── Alert rules ───────────────────────────────────────────────────────────────
+
+def list_alert_rules() -> list[dict]:
+    """All detection classes joined with their alert rule (enabled flag)."""
+    with _conn() as c:
+        rows = c.execute("""
+            SELECT
+                dc.id          AS class_id,
+                dc.class_index,
+                dc.name,
+                dc.color_hex,
+                COALESCE(ar.enabled, 0) AS enabled
+            FROM detection_class dc
+            LEFT JOIN alert_rule ar ON ar.class_id = dc.id
+            ORDER BY dc.class_index
+        """).fetchall()
+    return [dict(r) for r in rows]
+
+
+def set_alert_rule(class_id: int, enabled: bool) -> None:
+    with _conn() as c:
+        c.execute("""
+            INSERT INTO alert_rule (class_id, enabled, created_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(class_id) DO UPDATE SET enabled = excluded.enabled
+        """, (class_id, 1 if enabled else 0, _now()))
+        c.commit()
+
+
+def get_prohibited_class_ids() -> dict[int, str]:
+    """Return {class_index: color_hex} for all enabled alert rules."""
+    with _conn() as c:
+        rows = c.execute("""
+            SELECT dc.class_index, dc.color_hex
+            FROM alert_rule ar
+            JOIN detection_class dc ON dc.id = ar.class_id
+            WHERE ar.enabled = 1
+        """).fetchall()
+    return {r[0]: r[1] for r in rows}
+
+
+# ── Notifications ─────────────────────────────────────────────────────────────
+
+def insert_notification(
+    event_id:    int,
+    class_name:  str,
+    class_color: str,
+    computer:    str,
+    student:     str,
+) -> int:
+    with _conn() as c:
+        cur = c.execute(
+            "INSERT INTO notification "
+            "(event_id, class_name, class_color, computer, student, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (event_id, class_name, class_color, computer, student, _now()),
+        )
+        c.commit()
+        return cur.lastrowid
+
+
+def list_notifications(limit: int = 60) -> list[dict]:
+    with _conn() as c:
+        rows = c.execute("""
+            SELECT
+                n.id, n.event_id, n.class_name, n.class_color,
+                n.computer, n.student, n.is_read, n.created_at,
+                CASE WHEN e.frame_blob IS NOT NULL THEN 1 ELSE 0 END AS has_frame
+            FROM notification n
+            LEFT JOIN detection_event e ON e.id = n.event_id
+            ORDER BY n.created_at DESC
+            LIMIT ?
+        """, (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def count_unread_notifications() -> int:
+    with _conn() as c:
+        return c.execute(
+            "SELECT COUNT(*) FROM notification WHERE is_read = 0"
+        ).fetchone()[0]
+
+
+def mark_read(notification_id: int) -> None:
+    with _conn() as c:
+        c.execute("UPDATE notification SET is_read = 1 WHERE id = ?",
+                  (notification_id,))
+        c.commit()
+
+
+def mark_all_read() -> None:
+    with _conn() as c:
+        c.execute("UPDATE notification SET is_read = 1")
+        c.commit()
+
+
+# ── Analytics queries ─────────────────────────────────────────────────────────
+
+def get_summary_stats(
+    computer_id: Optional[int] = None,
+    user_id:     Optional[int] = None,
+    from_date:   str           = "",
+    to_date:     str           = "",
+) -> dict:
+    """Total events, detection events, unique active students, busiest class."""
+    w, p = _analytics_where(computer_id, user_id, from_date, to_date)
+    with _conn() as c:
+        base = f"FROM detection_event e LEFT JOIN user u ON u.id=e.user_id {w}"
+        total   = c.execute(f"SELECT COUNT(*) {base}", p).fetchone()[0]
+        hits    = c.execute(f"SELECT COUNT(*) {base} {'AND' if w else 'WHERE'} e.had_detection=1", p).fetchone()[0]
+        students = c.execute(
+            f"SELECT COUNT(DISTINCT COALESCE(e.user_id, e.windows_username)) {base}", p
+        ).fetchone()[0]
+        # busiest class
+        row = c.execute(f"""
+            SELECT dc.name, COUNT(*) AS cnt
+            FROM detection d
+            JOIN detection_event e ON e.id = d.event_id
+            JOIN detection_class dc ON dc.id = d.class_id
+            LEFT JOIN user u ON u.id = e.user_id
+            {w}
+            GROUP BY dc.name ORDER BY cnt DESC LIMIT 1
+        """, p).fetchone()
+        top_class = row[0] if row else "—"
+    return {
+        "total_events":      total,
+        "detection_events":  hits,
+        "active_students":   students,
+        "top_class":         top_class,
+    }
+
+
+def get_class_distribution(
+    computer_id: Optional[int] = None,
+    user_id:     Optional[int] = None,
+    from_date:   str           = "",
+    to_date:     str           = "",
+) -> list[dict]:
+    """Detection count per class, sorted descending."""
+    w, p = _analytics_where(computer_id, user_id, from_date, to_date)
+    with _conn() as c:
+        rows = c.execute(f"""
+            SELECT dc.name, dc.color_hex, COUNT(*) AS cnt
+            FROM detection d
+            JOIN detection_event e ON e.id = d.event_id
+            JOIN detection_class dc ON dc.id = d.class_id
+            LEFT JOIN user u ON u.id = e.user_id
+            {w}
+            GROUP BY dc.name, dc.color_hex
+            ORDER BY cnt DESC
+        """, p).fetchall()
+    return [{"name": r[0], "color": r[1], "count": r[2]} for r in rows]
+
+
+def get_daily_detections(
+    computer_id: Optional[int] = None,
+    user_id:     Optional[int] = None,
+    from_date:   str           = "",
+    to_date:     str           = "",
+) -> list[dict]:
+    """Events and detection-hits grouped by calendar day."""
+    w, p = _analytics_where(computer_id, user_id, from_date, to_date)
+    with _conn() as c:
+        rows = c.execute(f"""
+            SELECT
+                SUBSTR(e.detected_at, 1, 10)  AS day,
+                COUNT(*)                       AS total,
+                SUM(e.had_detection)           AS hits
+            FROM detection_event e
+            LEFT JOIN user u ON u.id = e.user_id
+            {w}
+            GROUP BY day
+            ORDER BY day
+        """, p).fetchall()
+    return [{"day": r[0], "total": r[1], "hits": r[2]} for r in rows]
+
+
+def get_student_activity(
+    computer_id: Optional[int] = None,
+    from_date:   str           = "",
+    to_date:     str           = "",
+) -> list[dict]:
+    """Detection-hit count per student (teacher-only view)."""
+    w, p = _analytics_where(computer_id, None, from_date, to_date)
+    with _conn() as c:
+        rows = c.execute(f"""
+            SELECT
+                COALESCE(u.username, e.windows_username, '(unknown)') AS student,
+                COUNT(*) AS hits
+            FROM detection_event e
+            LEFT JOIN user u ON u.id = e.user_id
+            {w} {'AND' if w else 'WHERE'} e.had_detection = 1
+            GROUP BY student
+            ORDER BY hits DESC
+            LIMIT 20
+        """, p).fetchall()
+    return [{"student": r[0], "hits": r[1]} for r in rows]
+
+
+def _analytics_where(
+    computer_id: Optional[int],
+    user_id:     Optional[int],
+    from_date:   str,
+    to_date:     str,
+) -> tuple[str, list]:
+    clauses: list[str] = []
+    params:  list      = []
+    if computer_id:
+        clauses.append("e.computer_id = ?"); params.append(computer_id)
+    if user_id:
+        clauses.append("e.user_id = ?");     params.append(user_id)
+    if from_date:
+        clauses.append("e.detected_at >= ?"); params.append(from_date + " 00:00:00")
+    if to_date:
+        clauses.append("e.detected_at <= ?"); params.append(to_date + " 23:59:59")
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    return where, params
 
 def query_events(
     computer_id: Optional[int] = None,

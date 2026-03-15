@@ -16,6 +16,8 @@ from app.services.monitor_service import drain_worker
 import app.pages.login      # noqa: F401
 import app.pages.dashboard  # noqa: F401
 import app.pages.history    # noqa: F401
+import app.pages.analytics  # noqa: F401
+import app.pages.alerts     # noqa: F401
 import app.pages.settings   # noqa: F401
 import app.pages.users      # noqa: F401
 

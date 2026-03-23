@@ -11,16 +11,11 @@ from datetime import datetime
 import cv2
 import numpy as np
 
-# BGR colours per class index
-BOX_COLORS: list[tuple[int, int, int]] = [
-    (  0, 255,   0),   # 0  DI               — green
-    (255, 128,   0),   # 1  Ekrano nuotraukos — orange
-    (  0, 128, 255),   # 2  Narsykle          — blue
-    (128,   0, 255),   # 3  Notepad           — purple
-    (  0, 255, 255),   # 4  Paint             — yellow
-    (255,   0, 128),   # 5  PowerPoint        — pink
-    ( 64, 200,  64),   # 6  Word              — light green
-]
+from app.core.colors import BGR_PALETTE
+
+# BOX_COLORS: unlimited classes supported — cycles through the 32-color palette.
+# Imported from colors.py so it stays in sync with detection_class.color_hex in the DB.
+BOX_COLORS = BGR_PALETTE
 
 
 def postprocess(

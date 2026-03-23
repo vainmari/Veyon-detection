@@ -32,6 +32,26 @@ DEFAULTS: dict = {
 }
 
 
+def apply_active_model(model_id: int) -> None:
+    """
+    Called from UI context after set_active_model().
+    Syncs detection_class table and updates all model-dependent settings
+    (model_path, detect_imgsz) so the next monitoring start picks them up
+    automatically — no manual Settings edits needed.
+    """
+    from app.db.database import get_model_by_id, sync_classes_from_model
+    m = get_model_by_id(model_id)
+    if not m:
+        return
+    sync_classes_from_model(model_id)
+    s = get_settings()
+    if m.get("onnx_path"):
+        s["model_path"] = m["onnx_path"]
+    if m.get("imgsz"):
+        s["detect_imgsz"] = str(m["imgsz"])
+    save_settings(s)
+
+
 def get_settings() -> dict:
     """Return stored settings merged on top of defaults."""
     return {**DEFAULTS, **app.storage.general.get("settings", {})}

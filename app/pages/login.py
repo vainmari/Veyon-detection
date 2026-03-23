@@ -17,7 +17,12 @@ def page_login() -> None:
     # Already logged in → skip
     user = get_session_user()
     if user:
-        ui.navigate.to("/history" if user["role"] == "student" else "/")
+        if user["role"] == "admin":
+            ui.navigate.to("/users")
+        elif user["role"] == "student":
+            ui.navigate.to("/history")
+        else:
+            ui.navigate.to("/")
         return
 
     with ui.column().classes(
@@ -42,7 +47,12 @@ def page_login() -> None:
                     password.set_value("")
                     return
                 set_session_user(u)
-                ui.navigate.to("/history" if u["role"] == "student" else "/")
+                if u["role"] == "admin":
+                    ui.navigate.to("/users")
+                elif u["role"] == "student":
+                    ui.navigate.to("/history")
+                else:
+                    ui.navigate.to("/")
 
             ui.button("Sign in", on_click=do_login).props(
                 "color=primary"

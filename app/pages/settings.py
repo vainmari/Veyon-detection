@@ -65,17 +65,19 @@ def page_settings() -> None:
         row("img_quality", "JPEG quality (1–100)")
         row("img_width",   "Capture width (px)")
 
-        section("YOLO Detection")
-        row("model_path",   "Model file path (.pt / .onnx)")
-        row("detect_conf",  "Confidence threshold")
-        row("detect_iou",   "IoU threshold")
-        row("detect_imgsz", "Input image size (imgsz)")
-        row("keep_top1",    "Keep top-1 box per class", kind="bool")
-
         section("Output")
         row("output_dir",     "Screenshots directory")
         row("save_raw",       "Save raw frames",       kind="bool")
         row("save_annotated", "Save annotated frames", kind="bool")
+
+        ui.separator().classes("my-3")
+        with ui.card().classes("w-full bg-blue-950 border border-blue-700"):
+            ui.markdown(
+                "**YOLO detection parameters** (model path, image size, "
+                "confidence, IoU) are managed automatically by the "
+                "**Models** page.  \n"
+                "Activate a model there and all parameters update instantly."
+            ).classes("text-sm text-blue-200")
 
         ui.separator().classes("my-4")
 

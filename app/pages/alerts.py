@@ -54,16 +54,13 @@ def _class_row(r: dict) -> None:
     with ui.card().classes("w-full").style("padding: 10px 16px;"):
         with ui.row().classes("items-center gap-4 w-full"):
 
-            # Color swatch
             ui.element("div").style(
                 f"width:14px; height:14px; border-radius:50%; "
                 f"background:{r['color_hex']}; flex-shrink:0;"
             )
 
-            # Class name
             ui.label(r["name"]).classes("flex-1 text-sm font-mono")
 
-            # Status label — updates when toggle changes
             status = ui.label(
                 "🚫 Prohibited" if r["enabled"] else "✅ Allowed"
             ).classes(
@@ -71,10 +68,9 @@ def _class_row(r: dict) -> None:
                 ("text-red-400" if r["enabled"] else "text-green-400")
             )
 
-            # Toggle — auto-saves
             toggle = ui.switch(value=bool(r["enabled"]))
 
-            def on_change(e, cid=r["class_id"], st=status, tg=toggle) -> None:
+            def on_change(e, cid=r["class_id"], name=r["name"], st=status) -> None:
                 enabled = bool(e.value)
                 set_alert_rule(cid, enabled)
                 if enabled:
@@ -84,8 +80,7 @@ def _class_row(r: dict) -> None:
                     st.set_text("✅ Allowed")
                     st.classes(replace="text-xs text-green-400")
                 ui.notify(
-                    f"{'Alert enabled' if enabled else 'Alert disabled'} "
-                    f"for {tg._props.get('label', '')}",
+                    f"{'Alert enabled' if enabled else 'Alert disabled'} for {name}",
                     type="positive" if enabled else "info",
                 )
 

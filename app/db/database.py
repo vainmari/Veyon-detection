@@ -14,6 +14,7 @@ Schema
 from __future__ import annotations
 
 import base64
+import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -56,7 +57,7 @@ def init_db() -> None:
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 username        TEXT    NOT NULL UNIQUE,
                 hashed_password TEXT    NOT NULL,
-                role            TEXT    NOT NULL CHECK(role IN ('teacher','student')),
+                role            TEXT    NOT NULL CHECK(role IN ('admin','teacher','student')),
                 created_by      INTEGER REFERENCES user(id) ON DELETE SET NULL,
                 created_at      TEXT    NOT NULL
             );
@@ -116,25 +117,101 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_notif_read ON notification(is_read);
             CREATE INDEX IF NOT EXISTS idx_notif_time ON notification(created_at);
 
+            -- ── ML Models ────────────────────────────────────────────────────
+            CREATE TABLE IF NOT EXISTS ml_model (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                name         TEXT    NOT NULL UNIQUE,
+                pt_path      TEXT,
+                onnx_path    TEXT,
+                nc           INTEGER NOT NULL,
+                classes_json TEXT    NOT NULL,
+                map50        REAL,
+                map50_95     REAL,
+                precision    REAL,
+                recall       REAL,
+                is_active    INTEGER NOT NULL DEFAULT 0,
+                status       TEXT    NOT NULL DEFAULT 'ready',
+                created_at   TEXT    NOT NULL,
+                finished_at  TEXT
+            );
+
+            -- ── Training sessions ─────────────────────────────────────────────
+            CREATE TABLE IF NOT EXISTS training_session (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                model_id     INTEGER REFERENCES ml_model(id) ON DELETE CASCADE,
+                dataset_path TEXT    NOT NULL,
+                base_model   TEXT    NOT NULL,
+                epochs       INTEGER NOT NULL,
+                imgsz        INTEGER NOT NULL,
+                batch        INTEGER NOT NULL,
+                device       TEXT,
+                status       TEXT    NOT NULL DEFAULT 'running',
+                started_at   TEXT    NOT NULL,
+                finished_at  TEXT
+            );
+
         """)
         c.commit()
 
 
 def _migrate(c: sqlite3.Connection) -> None:
-    """Add columns introduced after the initial release — safe on both new and existing DBs."""
-    # Check the table exists before inspecting its columns (won't exist on first run)
-    table_exists = c.execute(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='detection_event'"
+    """Add columns and fix constraints introduced after initial release."""
+    # ── detection_event.windows_username ─────────────────────────────────────
+    de_exists = c.execute(
+        "SELECT COUNT(*) FROM sqlite_master "
+        "WHERE type='table' AND name='detection_event'"
     ).fetchone()[0]
-    if not table_exists:
-        return   # fresh DB — executescript will create everything correctly
+    if de_exists:
+        de_cols = {r[1] for r in c.execute(
+            "PRAGMA table_info(detection_event)").fetchall()}
+        if "windows_username" not in de_cols:
+            c.execute(
+                "ALTER TABLE detection_event ADD COLUMN windows_username TEXT")
 
-    existing = {row[1] for row in
-                c.execute("PRAGMA table_info(detection_event)").fetchall()}
-    if "windows_username" not in existing:
-        c.execute(
-            "ALTER TABLE detection_event ADD COLUMN windows_username TEXT"
-        )
+    # ── ml_model.imgsz ───────────────────────────────────────────────────────
+    ml_exists = c.execute(
+        "SELECT COUNT(*) FROM sqlite_master "
+        "WHERE type='table' AND name='ml_model'"
+    ).fetchone()[0]
+    if ml_exists:
+        ml_cols = {r[1] for r in c.execute(
+            "PRAGMA table_info(ml_model)").fetchall()}
+        if "imgsz" not in ml_cols:
+            c.execute(
+                "ALTER TABLE ml_model ADD COLUMN imgsz INTEGER DEFAULT 640")
+
+    # ── user role: add 'admin' to allowed values ──────────────────────────────
+    # SQLite can't ALTER a CHECK constraint, so recreate the table if the old
+    # constraint is still in place (detectable by checking for 'admin' in schema).
+    user_exists = c.execute(
+        "SELECT COUNT(*) FROM sqlite_master "
+        "WHERE type='table' AND name='user'"
+    ).fetchone()[0]
+    if user_exists:
+        schema = c.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='user'"
+        ).fetchone()
+        if schema and "'admin'" not in schema[0]:
+            # Recreate user table with updated CHECK constraint
+            c.executescript("""
+                PRAGMA foreign_keys = OFF;
+                CREATE TABLE IF NOT EXISTS user_new (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username        TEXT    NOT NULL UNIQUE,
+                    hashed_password TEXT    NOT NULL,
+                    role            TEXT    NOT NULL
+                                    CHECK(role IN ('admin','teacher','student')),
+                    created_by      INTEGER REFERENCES user_new(id)
+                                    ON DELETE SET NULL,
+                    created_at      TEXT    NOT NULL
+                );
+                INSERT INTO user_new
+                    SELECT id, username, hashed_password, role,
+                           created_by, created_at FROM user;
+                DROP TABLE user;
+                ALTER TABLE user_new RENAME TO user;
+                PRAGMA foreign_keys = ON;
+            """)
 
 
 # ── Seed ─────────────────────────────────────────────────────────────────────
@@ -151,6 +228,7 @@ DEFAULT_CLASSES: list[dict] = [
 
 
 def seed_classes() -> None:
+    """Seed default classes only if table is completely empty."""
     with _conn() as c:
         if c.execute("SELECT COUNT(*) FROM detection_class").fetchone()[0] == 0:
             now = _now()
@@ -162,12 +240,36 @@ def seed_classes() -> None:
             c.commit()
 
 
+def sync_classes_from_model(model_id: int) -> None:
+    """
+    Upsert detection_class rows from a trained model's class list.
+    Existing rows are updated (name + color); old rows beyond the new model's
+    class count are left intact (FK safety) but won't appear in detections.
+    """
+    from app.core.colors import class_hex
+    model = get_model_by_id(model_id)
+    if not model:
+        return
+    names = model.get("class_names", [])
+    with _conn() as c:
+        for i, name in enumerate(names):
+            c.execute("""
+                INSERT INTO detection_class (class_index, name, color_hex, created_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(class_index) DO UPDATE SET
+                    name      = excluded.name,
+                    color_hex = excluded.color_hex
+            """, (i, name, class_hex(i), _now()))
+        c.commit()
+
+
 def ensure_default_teacher(username: str = "admin", password: str = "admin") -> None:
+    """Create a default admin account if no users exist at all."""
     with _conn() as c:
         if c.execute("SELECT COUNT(*) FROM user").fetchone()[0] == 0:
             c.execute(
                 "INSERT INTO user (username, hashed_password, role, created_at) "
-                "VALUES (?, ?, 'teacher', ?)",
+                "VALUES (?, ?, 'admin', ?)",
                 (username, _hash_pw(password), _now()),
             )
             c.commit()
@@ -480,6 +582,152 @@ def mark_read(notification_id: int) -> None:
 def mark_all_read() -> None:
     with _conn() as c:
         c.execute("UPDATE notification SET is_read = 1")
+        c.commit()
+
+
+# ── ML Models ────────────────────────────────────────────────────────────────
+
+def create_ml_model(
+    name:        str,
+    nc:          int,
+    class_names: list[str],
+    pt_path:     Optional[str] = None,
+    onnx_path:   Optional[str] = None,
+    map50:       float = 0.0,
+    map50_95:    float = 0.0,
+    precision:   float = 0.0,
+    recall:      float = 0.0,
+    status:      str   = "ready",
+    imgsz:       int   = 640,
+) -> int:
+    with _conn() as c:
+        cur = c.execute(
+            "INSERT INTO ml_model "
+            "(name, pt_path, onnx_path, nc, classes_json, map50, map50_95, "
+            " precision, recall, status, imgsz, created_at, finished_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (name, pt_path, onnx_path, nc,
+             json.dumps(class_names),
+             map50, map50_95, precision, recall,
+             status, imgsz, _now(), _now()),
+        )
+        c.commit()
+        return cur.lastrowid
+
+
+def update_ml_model(model_id: int, **kwargs) -> None:
+    allowed = {"pt_path","onnx_path","map50","map50_95","precision",
+               "recall","status","finished_at","is_active"}
+    sets    = ", ".join(f"{k}=?" for k in kwargs if k in allowed)
+    vals    = [v for k, v in kwargs.items() if k in allowed]
+    if not sets:
+        return
+    with _conn() as c:
+        c.execute(f"UPDATE ml_model SET {sets} WHERE id=?", [*vals, model_id])
+        c.commit()
+
+
+def get_active_model() -> Optional[dict]:
+    with _conn() as c:
+        row = c.execute(
+            "SELECT * FROM ml_model WHERE is_active = 1 LIMIT 1"
+        ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["class_names"] = json.loads(d.get("classes_json", "[]"))
+    return d
+
+
+def get_model_by_id(model_id: int) -> Optional[dict]:
+    with _conn() as c:
+        row = c.execute(
+            "SELECT * FROM ml_model WHERE id = ?", (model_id,)
+        ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["class_names"] = json.loads(d.get("classes_json", "[]"))
+    return d
+
+
+def set_active_model(model_id: int) -> None:
+    with _conn() as c:
+        c.execute("UPDATE ml_model SET is_active = 0")
+        c.execute("UPDATE ml_model SET is_active = 1 WHERE id = ?", (model_id,))
+        c.commit()
+
+
+def list_models() -> list[dict]:
+    """Return all models joined with their most recent training session."""
+    with _conn() as c:
+        rows = c.execute("""
+            SELECT m.*,
+                (SELECT ts.base_model FROM training_session ts
+                 WHERE ts.model_id = m.id
+                 ORDER BY ts.started_at DESC LIMIT 1) AS base_model
+            FROM ml_model m
+            ORDER BY m.created_at DESC
+        """).fetchall()
+    result = []
+    for r in rows:
+        d = dict(r)
+        d["class_names"] = json.loads(d.get("classes_json", "[]"))
+        result.append(d)
+    return result
+
+
+def list_model_sessions(model_id: int) -> list[dict]:
+    """Return all training sessions for a model, newest first."""
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT * FROM training_session WHERE model_id = ? "
+            "ORDER BY started_at DESC",
+            (model_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_model(model_id: int) -> None:
+    with _conn() as c:
+        c.execute("DELETE FROM ml_model WHERE id = ?", (model_id,))
+        c.commit()
+
+
+# ── Training sessions ─────────────────────────────────────────────────────────
+
+def create_training_session(
+    model_id:     int,
+    dataset_path: str,
+    base_model:   str,
+    epochs:       int,
+    imgsz:        int,
+    batch:        int,
+    device:       str,
+) -> int:
+    with _conn() as c:
+        cur = c.execute(
+            "INSERT INTO training_session "
+            "(model_id, dataset_path, base_model, epochs, imgsz, batch, "
+            " device, started_at) VALUES (?,?,?,?,?,?,?,?)",
+            (model_id, dataset_path, base_model, epochs,
+             imgsz, batch, device, _now()),
+        )
+        c.commit()
+        return cur.lastrowid
+
+
+def update_training_session(session_id: int, **kwargs) -> None:
+    allowed = {"status", "finished_at"}
+    sets    = ", ".join(f"{k}=?" for k in kwargs if k in allowed)
+    vals    = [v for k, v in kwargs.items() if k in allowed]
+    if not sets:
+        return
+    with _conn() as c:
+        c.execute(
+            f"UPDATE training_session SET {sets} WHERE id=?",
+            [*vals, session_id],
+        )
         c.commit()
 
 

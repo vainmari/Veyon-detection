@@ -1,15 +1,16 @@
 """
 app/pages/users.py
 ──────────────────
-User management page  /users   (teacher only)
-• Lists all users with role badges
-• Create student account
-• After creation: offer to retroactively assign anonymous events
-• Delete student accounts
+User management page  /users  (teacher + admin)
+
+Role capabilities
+─────────────────
+  admin   — sees all users; create/delete teacher + student; cannot delete self
+  teacher — sees students + other teachers (read-only); create/delete students
 """
 from nicegui import ui
 
-from app.core.auth import require_auth
+from app.core.auth import is_admin, require_auth
 from app.db.database import (
     create_user,
     delete_user,
@@ -21,53 +22,83 @@ from app.pages._nav import nav
 
 @ui.page("/users")
 def page_users() -> None:
-    current = require_auth(required_role="teacher")
+    current = require_auth(required_role="teacher_or_admin")
     if current is None:
         return
     nav(current)
+    admin = is_admin(current)
 
     with ui.column().classes("w-full p-4 gap-4"):
         ui.label("User Management").classes("text-xl font-bold")
 
-        # Info banner
+        # ── Info banner ───────────────────────────────────────────────────────
         with ui.card().classes("w-full bg-blue-950 border border-blue-700"):
             ui.markdown(
-                "**Student usernames must match their login name**"
-                "  \n Events are always logged with the username, so any "
-                "previously recorded events will be **automatically assigned** "
-                "the moment a matching account is created."
+                "**Student usernames must match their Windows login name** "
+                "(e.g. `Lina` — the part after the backslash).  \n"
+                "Previously recorded events are **automatically assigned** "
+                "when a matching student account is created.  \n"
+                + (
+                    "As **admin** you can also create teacher accounts — "
+                    "their username can be anything."
+                    if admin else
+                    "As **teacher** you can create and delete student accounts."
+                )
             ).classes("text-sm text-blue-200")
 
-        # ── Create student form ───────────────────────────────────────────────
+        # ── Create user form ──────────────────────────────────────────────────
         with ui.card().classes("w-full"):
-            ui.label("Create Student Account").classes(
+            ui.label("Create Account").classes(
                 "text-sm font-semibold text-gray-400 mb-2")
             with ui.row().classes("gap-3 items-end flex-wrap"):
-                new_username = ui.input("Username (e.g. Jonas)").props(
-                    "dense outlined").classes("w-56")
+                new_username = ui.input("Username").props(
+                    "dense outlined").classes("w-52")
                 new_password = ui.input(
-                    "Password",
+                    "Temporary password",
                     password=True,
                     password_toggle_button=True,
                 ).props("dense outlined").classes("w-52")
+
+                # Admins can choose any role; teachers can only create students
+                if admin:
+                    new_role = ui.select(
+                        {"student": "Student", "teacher": "Teacher"},
+                        value="student", label="Role",
+                    ).props("dense outlined").classes("w-32")
+                    role_hint = ui.label("Windows login name for students"
+                                        ).classes("text-xs text-gray-500 self-end pb-1")
+
+                    def _update_hint() -> None:
+                        role_hint.set_text(
+                            "Windows login name" if new_role.value == "student"
+                            else "Any username"
+                        )
+                    new_role.on_value_change(lambda _: _update_hint())
+
                 form_msg = ui.label("").classes("text-sm")
 
                 def do_create() -> None:
                     uname = new_username.value.strip()
                     pwd   = new_password.value.strip()
+                    role  = new_role.value if admin else "student"
                     if not uname or not pwd:
                         form_msg.set_text("Fill in both fields")
                         form_msg.classes(replace="text-sm text-red-400")
                         return
                     try:
                         new_uid = create_user(
-                            uname, pwd, "student",
+                            uname, pwd, role,
                             created_by_id=current["id"],
                         )
-                        assigned = len(query_events(user_id=new_uid))
-                        suffix   = (f" — {assigned} previous event(s) auto-assigned"
-                                    if assigned else "")
-                        form_msg.set_text(f"✅ Created '{uname}'{suffix}")
+                        if role == "student":
+                            assigned = len(query_events(user_id=new_uid))
+                            suffix   = (f" — {assigned} previous event(s) "
+                                        "auto-assigned" if assigned else "")
+                            form_msg.set_text(
+                                f"✅ Student '{uname}' created{suffix}")
+                        else:
+                            form_msg.set_text(
+                                f"✅ Teacher '{uname}' created")
                         form_msg.classes(replace="text-sm text-green-400")
                         new_username.set_value("")
                         new_password.set_value("")
@@ -94,30 +125,58 @@ def page_users() -> None:
 
         tbl.add_slot("body-cell-role", """
             <q-td :props="props">
-                <q-badge :color="props.row.role === 'teacher' ? 'orange' : 'blue'">
+                <q-badge :color="props.row.role === 'admin'    ? 'red'    :
+                                 props.row.role === 'teacher'  ? 'orange' : 'blue'">
                     {{ props.row.role }}
                 </q-badge>
             </q-td>
         """)
-        tbl.add_slot("body-cell-actions", """
-            <q-td :props="props">
-                <q-btn v-if="props.row.role === 'student'"
-                    flat dense round icon="delete" color="red"
-                    @click="$parent.$emit('delete_user', props.row)" />
-            </q-td>
-        """)
+
+        if admin:
+            # Admins can delete anyone except themselves and other admins
+            tbl.add_slot("body-cell-actions", """
+                <q-td :props="props">
+                    <q-btn
+                        v-if="props.row.role !== 'admin'"
+                        flat dense round icon="delete" color="red"
+                        @click="$parent.$emit('delete_user', props.row)"
+                    />
+                </q-td>
+            """)
+        else:
+            # Teachers can only delete students
+            tbl.add_slot("body-cell-actions", """
+                <q-td :props="props">
+                    <q-btn
+                        v-if="props.row.role === 'student'"
+                        flat dense round icon="delete" color="red"
+                        @click="$parent.$emit('delete_user', props.row)"
+                    />
+                </q-td>
+            """)
 
         def handle_delete(e) -> None:
-            uid = e.args.get("id")
-            if uid and int(uid) != current["id"]:
+            row  = e.args
+            uid  = row.get("id")
+            role = row.get("role", "")
+            if not uid or int(uid) == current["id"]:
+                return
+            # Admins can delete teachers + students; teachers can only delete students
+            if admin and role in ("teacher", "student"):
                 delete_user(int(uid))
                 ui.notify("User deleted", type="warning")
+                _refresh()
+            elif not admin and role == "student":
+                delete_user(int(uid))
+                ui.notify("Student deleted", type="warning")
                 _refresh()
 
         tbl.on("delete_user", handle_delete)
 
     def _refresh() -> None:
-        tbl.rows = list_users()
+        rows = list_users()
+        # Teachers see everyone; no filter needed (they can see teachers read-only)
+        tbl.rows = rows
         tbl.update()
 
     _refresh()

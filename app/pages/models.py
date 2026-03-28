@@ -1,17 +1,25 @@
 """
-app/pages/models.py   (rename your training.py to this)
-──────────────────────────────────────────────────────────
-Models page  /models  (teacher only)
+app/pages/models.py
+────────────────────
+Models page  /models  (teacher + admin)
 
 Layout
 ──────
   TOP     — GPU status card
   SECTION — Model Library  (expanded: classes, imgsz, base model, history)
   SECTION — Training Wizard (4 steps)
+
+Fixes vs original
+─────────────────
+  • do_save used raw sqlite3 to patch name/imgsz/nc/classes_json — now uses
+    update_ml_model() via the proper DB layer (those fields added to allowed set).
+  • Removed duplicate _import_section() function that was defined at module
+    level but never called (real import UI lives inside _model_library).
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import queue
 import sys
@@ -32,6 +40,7 @@ from app.db.database import (
     list_model_sessions,
     list_models,
     set_active_model,
+    update_ml_model,
 )
 from app.pages._nav import nav
 from app.services.training_service import (
@@ -96,9 +105,9 @@ def _gpu_card() -> None:
                 "download and restarts automatically when done."
             ).classes("text-sm text-gray-400 mt-2")
 
-            spinner    = ui.spinner("dots", size="sm").classes("mt-2")
+            spinner     = ui.spinner("dots", size="sm").classes("mt-2")
             spinner.set_visibility(False)
-            dl_label   = ui.label("").classes("text-xs text-blue-300 font-mono")
+            dl_label    = ui.label("").classes("text-xs text-blue-300 font-mono")
             install_log = ui.log(max_lines=200).classes(
                 "w-full font-mono text-xs bg-gray-950 text-green-300 rounded mt-1"
             ).style("height:160px; display:none;")
@@ -186,8 +195,8 @@ def _model_library() -> None:
          ui.card().classes("p-5 gap-3").style("min-width:560px; max-width:95vw;"):
         ui.label("Import Model").classes("text-lg font-bold mb-1")
 
-        imp_msg    = ui.label("").classes("text-sm")
-        imp_file   = {"data": None, "name": ""}
+        imp_msg  = ui.label("").classes("text-sm")
+        imp_file = {"data": None, "name": ""}
 
         with ui.card().classes(
             "w-full bg-gray-800 border border-dashed border-gray-500"
@@ -220,12 +229,6 @@ def _model_library() -> None:
 
         ui.separator().classes("my-2")
 
-        def irow(label: str, widget):
-            with ui.row().classes("w-full items-center gap-3 py-0"):
-                ui.label(label).classes("w-40 text-sm flex-shrink-0")
-                return widget
-            return widget
-
         with ui.row().classes("w-full items-center gap-3 py-0"):
             ui.label("Model name").classes("w-40 text-sm flex-shrink-0")
             imp_name = ui.input(placeholder="e.g. MyDetector_v1"
@@ -251,8 +254,7 @@ def _model_library() -> None:
                 ui.label("Comma-separated or YAML names block"
                          ).classes("text-xs text-gray-500")
 
-        ui.label("Metrics (optional)").classes(
-            "text-xs text-gray-400 mt-2")
+        ui.label("Metrics (optional)").classes("text-xs text-gray-400 mt-2")
         with ui.row().classes("gap-3 flex-wrap"):
             imp_map50   = ui.number(label="mAP50",    value=0.0,
                                     min=0, max=1, step=0.001, format="%.3f"
@@ -295,7 +297,7 @@ def _model_library() -> None:
                     imp_msg.classes(replace="text-sm text-red-400")
                     return
 
-                is_pt   = onnx_path.endswith(".pt")
+                is_pt = onnx_path.endswith(".pt")
                 try:
                     model_id = create_ml_model(
                         name        = imp_name.value.strip(),
@@ -341,7 +343,7 @@ def _model_library() -> None:
     with ui.dialog() as edit_dlg, \
          ui.card().classes("p-5 gap-3").style("min-width:520px; max-width:95vw;"):
         edit_title = ui.label("").classes("text-lg font-bold mb-1")
-        edit_mid   = [None]   # mutable cell so the save handler can read it
+        edit_mid   = [None]
 
         with ui.row().classes("w-full items-center gap-3 py-0"):
             ui.label("Model name").classes("w-40 text-sm flex-shrink-0")
@@ -386,27 +388,18 @@ def _model_library() -> None:
                 if not edit_name.value.strip():
                     ui.notify("Model name cannot be empty.", type="negative")
                     return
-                from app.db.database import update_ml_model
+                # Use the proper DB layer — no raw sqlite3 here
                 update_ml_model(
                     mid,
-                    map50       = float(edit_map50.value   or 0),
-                    map50_95    = float(edit_map5095.value or 0),
-                    precision   = float(edit_prec.value    or 0),
-                    recall      = float(edit_recall.value  or 0),
+                    name         = edit_name.value.strip(),
+                    imgsz        = int(edit_imgsz.value),
+                    nc           = len(names),
+                    classes_json = json.dumps(names),
+                    map50        = float(edit_map50.value   or 0),
+                    map50_95     = float(edit_map5095.value or 0),
+                    precision    = float(edit_prec.value    or 0),
+                    recall       = float(edit_recall.value  or 0),
                 )
-                # Patch name, imgsz, classes directly (not in update_ml_model's
-                # allowed set — extend it)
-                import sqlite3
-                from app.db.database import DB_PATH, _now
-                with sqlite3.connect(DB_PATH) as c:
-                    import json as _json
-                    c.execute(
-                        "UPDATE ml_model SET name=?, imgsz=?, nc=?, "
-                        "classes_json=? WHERE id=?",
-                        (edit_name.value.strip(), int(edit_imgsz.value),
-                         len(names), _json.dumps(names), mid),
-                    )
-                    c.commit()
                 edit_dlg.close()
                 ui.notify("Model updated.", type="positive")
                 _model_library.refresh()
@@ -551,7 +544,7 @@ def _model_library() -> None:
             m = get_model_by_id(int(mid))
             if not m:
                 return
-            edit_mid[0]  = int(mid)
+            edit_mid[0] = int(mid)
             edit_title.set_text(f"Edit — {m['name']}")
             edit_name.set_value(m["name"])
             edit_imgsz.set_value(m.get("imgsz") or 640)
@@ -559,9 +552,7 @@ def _model_library() -> None:
             edit_map5095.set_value(m.get("map50_95") or 0.0)
             edit_prec.set_value(m.get("precision") or 0.0)
             edit_recall.set_value(m.get("recall") or 0.0)
-            # Show classes as comma-separated list
-            edit_classes.set_value(
-                ", ".join(m.get("class_names") or []))
+            edit_classes.set_value(", ".join(m.get("class_names") or []))
             edit_dlg.open()
 
         def on_show_classes(e) -> None:
@@ -602,232 +593,7 @@ def _model_library() -> None:
         tbl.on("del_model",    on_delete)
 
 
-# ── Import existing model ─────────────────────────────────────────────────────
-
-def _import_section() -> None:
-    """
-    Let the teacher register an existing ONNX (or .pt) model without training.
-    Supports two import paths:
-      A) Upload the file via browser (stored in data/models/imported/)
-      B) Provide a path already on the server filesystem
-    Classes can be entered as a comma-separated list or pasted as a YAML
-    names block (e.g. from an existing data.yaml).
-    """
-    IMPORTED_DIR = Path("data/models/imported")
-    IMPORTED_DIR.mkdir(parents=True, exist_ok=True)
-
-    with ui.card().classes("w-full max-w-3xl"):
-        ui.markdown(
-            "Register an existing ONNX or PyTorch model without training. "
-            "All fields except the file/path are editable after import."
-        ).classes("text-sm text-gray-400 mb-3")
-
-        msg_lbl    = ui.label("").classes("text-sm")
-        file_ref   = {"data": None, "name": ""}
-
-        # ── File source ───────────────────────────────────────────────────────
-        with ui.card().classes("w-full bg-gray-800 border border-dashed border-gray-500"):
-            ui.label("Option A — Upload model file (.onnx / .pt)"
-                     ).classes("text-xs text-gray-400 mb-2")
-
-            async def handle_model_upload(e: events.UploadEventArguments) -> None:
-                raw  = await e.file.read()
-                name = getattr(e, "name", "model.onnx")
-                file_ref["data"] = raw
-                file_ref["name"] = name
-                msg_lbl.set_text(f"✅  {name}  ({len(raw)//1024} KB loaded)")
-                msg_lbl.classes(replace="text-sm text-green-400")
-
-            ui.upload(
-                label="Drop .onnx or .pt here",
-                on_upload=handle_model_upload,
-                auto_upload=True,
-            ).props("accept=.onnx,.pt flat").classes("w-full")
-
-        ui.label("— or —").classes("text-center text-gray-500 text-sm my-1")
-
-        with ui.card().classes("w-full bg-gray-800"):
-            ui.label("Option B — Server path to model file"
-                     ).classes("text-xs text-gray-400 mb-1")
-            path_input = ui.input(
-                placeholder="e.g. weights/ONNX_FP32.onnx"
-            ).props("dense outlined").classes("w-full")
-
-        ui.separator().classes("my-3")
-
-        # ── Metadata ──────────────────────────────────────────────────────────
-        ui.label("Model metadata").classes(
-            "text-sm font-semibold text-gray-400 mb-2")
-
-        def mrow(label: str):
-            with ui.row().classes("w-full items-start gap-4 py-1"):
-                ui.label(label).classes("w-44 text-sm mt-2 flex-shrink-0")
-
-        with ui.row().classes("w-full items-center gap-4 py-1"):
-            ui.label("Model name").classes("w-44 text-sm flex-shrink-0")
-            f_name = ui.input(
-                placeholder="e.g. MyDetector_v1"
-            ).props("dense outlined").classes("flex-1")
-
-        with ui.row().classes("w-full items-center gap-4 py-1"):
-            ui.label("Image size (imgsz)").classes("w-44 text-sm flex-shrink-0")
-            f_imgsz = ui.select(
-                [320, 480, 640, 1280], value=640
-            ).props("dense outlined").classes("w-32")
-
-        with ui.row().classes("w-full items-center gap-4 py-1"):
-            ui.label("Base / origin").classes("w-44 text-sm flex-shrink-0")
-            f_base = ui.input(
-                placeholder="e.g. yolo11n.pt  or  external"
-            ).props("dense outlined").classes("flex-1")
-
-        # Classes — multi-line input; auto-detect YAML or CSV
-        with ui.row().classes("w-full items-start gap-4 py-1"):
-            ui.label("Classes").classes("w-44 text-sm mt-2 flex-shrink-0")
-            with ui.column().classes("flex-1 gap-1"):
-                f_classes = ui.textarea(
-                    placeholder=(
-                        "Comma-separated:  DI, Narsykle, Notepad\n"
-                        "— or YAML names list —\n"
-                        "names:\n  - DI\n  - Narsykle\n  - Notepad"
-                    )
-                ).props("dense outlined rows=5").classes("w-full font-mono text-xs")
-                ui.label(
-                    "Accepted: comma-separated list  or  YAML names block"
-                ).classes("text-xs text-gray-500")
-
-        # Optional metrics
-        ui.label("Metrics (optional)").classes(
-            "text-sm font-semibold text-gray-400 mt-3 mb-1")
-        with ui.row().classes("gap-4 flex-wrap"):
-            f_map50   = ui.number(label="mAP50",    value=0.0,
-                                  min=0, max=1, step=0.001, format="%.3f"
-                                  ).props("dense outlined").classes("w-28")
-            f_map5095 = ui.number(label="mAP50-95", value=0.0,
-                                  min=0, max=1, step=0.001, format="%.3f"
-                                  ).props("dense outlined").classes("w-28")
-            f_prec    = ui.number(label="Precision", value=0.0,
-                                  min=0, max=1, step=0.001, format="%.3f"
-                                  ).props("dense outlined").classes("w-28")
-            f_recall  = ui.number(label="Recall",    value=0.0,
-                                  min=0, max=1, step=0.001, format="%.3f"
-                                  ).props("dense outlined").classes("w-28")
-
-        ui.separator().classes("my-3")
-
-        # ── Import button ─────────────────────────────────────────────────────
-
-        async def do_import() -> None:
-            # ── Resolve file path ─────────────────────────────────────────────
-            if file_ref["data"]:
-                fname    = file_ref["name"]
-                dst      = IMPORTED_DIR / fname
-                dst.write_bytes(file_ref["data"])
-                onnx_path = str(dst)
-            elif path_input.value.strip():
-                p = Path(path_input.value.strip())
-                if not p.exists():
-                    msg_lbl.set_text(f"❌  File not found: {p}")
-                    msg_lbl.classes(replace="text-sm text-red-400")
-                    return
-                onnx_path = str(p)
-            else:
-                msg_lbl.set_text("Provide a model file or a local path.")
-                msg_lbl.classes(replace="text-sm text-red-400")
-                return
-
-            # ── Parse class names ─────────────────────────────────────────────
-            raw_classes = f_classes.value.strip()
-            names: list[str] = []
-            if raw_classes:
-                # Try YAML first (handles 'names:\n  - Foo\n  - Bar')
-                try:
-                    parsed = yaml.safe_load(raw_classes)
-                    if isinstance(parsed, dict) and "names" in parsed:
-                        names = [str(n) for n in parsed["names"]]
-                    elif isinstance(parsed, list):
-                        names = [str(n) for n in parsed]
-                    else:
-                        raise ValueError("not a names block")
-                except Exception:
-                    # Fall back to comma-separated
-                    names = [n.strip() for n in raw_classes.split(",")
-                             if n.strip()]
-
-            if not names:
-                msg_lbl.set_text("❌  Enter at least one class name.")
-                msg_lbl.classes(replace="text-sm text-red-400")
-                return
-
-            # ── Validate name ─────────────────────────────────────────────────
-            model_name = f_name.value.strip()
-            if not model_name:
-                msg_lbl.set_text("❌  Enter a model name.")
-                msg_lbl.classes(replace="text-sm text-red-400")
-                return
-
-            # ── Detect pt vs onnx ─────────────────────────────────────────────
-            is_pt   = onnx_path.endswith(".pt")
-            pt_path = onnx_path if is_pt else None
-            on_path = None if is_pt else onnx_path
-
-            # ── Write to DB ───────────────────────────────────────────────────
-            try:
-                model_id = create_ml_model(
-                    name        = model_name,
-                    nc          = len(names),
-                    class_names = names,
-                    pt_path     = pt_path,
-                    onnx_path   = on_path,
-                    map50       = float(f_map50.value   or 0),
-                    map50_95    = float(f_map5095.value or 0),
-                    precision   = float(f_prec.value    or 0),
-                    recall      = float(f_recall.value  or 0),
-                    status      = "ready",
-                    imgsz       = int(f_imgsz.value),
-                )
-            except Exception as ex:
-                msg_lbl.set_text(f"❌  DB error: {ex}")
-                msg_lbl.classes(replace="text-sm text-red-400")
-                return
-
-            # Record base model string in training_session (0 epochs = imported)
-            from app.db.database import create_training_session, update_training_session
-            sess_id = create_training_session(
-                model_id     = model_id,
-                dataset_path = "— imported —",
-                base_model   = f_base.value.strip() or "imported",
-                epochs       = 0,
-                imgsz        = int(f_imgsz.value),
-                batch        = 0,
-                device       = "—",
-            )
-            update_training_session(
-                sess_id, status="done",
-                finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            )
-
-            msg_lbl.set_text(
-                f"✅  '{model_name}' imported successfully "
-                f"({len(names)} classes).")
-            msg_lbl.classes(replace="text-sm text-green-400")
-
-            # Reset form
-            f_name.set_value("")
-            f_classes.set_value("")
-            f_base.set_value("")
-            path_input.set_value("")
-            file_ref["data"] = None
-            file_ref["name"] = ""
-            f_map50.set_value(0.0)
-            f_map5095.set_value(0.0)
-            f_prec.set_value(0.0)
-            f_recall.set_value(0.0)
-
-            _model_library.refresh()
-
-        ui.button("Import Model", icon="upload",
-                  on_click=do_import).props("color=primary")
+# ── Training wizard ───────────────────────────────────────────────────────────
 
 def _training_wizard() -> None:
     ws: dict = {
@@ -851,7 +617,7 @@ def _training_wizard() -> None:
     wizard_body()
 
 
-# ── Step 1: Upload ─────────────────────────────────────────────────────────────
+# ── Step 1: Upload ────────────────────────────────────────────────────────────
 
 def _step_upload(ws: dict, refresh) -> None:
     with ui.card().classes("w-full max-w-2xl"):
@@ -1002,10 +768,6 @@ def _step_analysis(ws: dict, refresh) -> None:
         with ui.card().classes("w-full max-w-xl"):
             ui.label("Training Configuration").classes(
                 "text-sm font-semibold text-gray-400 mb-3")
-
-            def cfg_row(label: str):
-                with ui.row().classes("w-full items-center gap-4 py-1"):
-                    ui.label(label).classes("w-44 text-sm")
 
             with ui.row().classes("w-full items-center gap-4 py-1"):
                 ui.label("Run name").classes("w-44 text-sm")
@@ -1261,8 +1023,7 @@ def _step_done(ws: dict, refresh) -> None:
                     ("ONNX path",   model.get("onnx_path") or "—"),
                 ]:
                     with ui.row().classes("gap-3"):
-                        ui.label(f"{label}:").classes(
-                            "text-gray-400 text-sm w-28")
+                        ui.label(f"{label}:").classes("text-gray-400 text-sm w-28")
                         ui.label(val).classes("text-sm font-mono")
 
         with ui.row().classes("gap-3 mt-4"):
@@ -1279,7 +1040,6 @@ def _step_done(ws: dict, refresh) -> None:
 
             def new_run() -> None:
                 state.training_worker = None
-                ws.update({"step": "upload", "analysis": None,
-                           "model_id": None})
+                ws.update({"step": "upload", "analysis": None, "model_id": None})
                 refresh.refresh()
             ui.button("Train Another Model", on_click=new_run).props("flat")

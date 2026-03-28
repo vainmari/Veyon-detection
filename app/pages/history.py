@@ -5,7 +5,7 @@ History page  /history
 
 Teacher view  — full filters (computer, student, class, hits-only)
 Student view  — auto-filtered to own records, computer selector hidden
-Both views    — 📷 button opens stored JPEG snapshot in a dialog
+Both views    — 📷 opens snapshot preview; ⛶ Full screen opens maximized dialog.
 """
 from nicegui import ui
 
@@ -18,6 +18,7 @@ from app.db.database import (
     query_events,
 )
 from app.pages._nav import nav
+from app.pages._snapshot import make_snapshot_dialogs
 
 
 @ui.page("/history")
@@ -28,12 +29,14 @@ def page_history() -> None:
     nav(current)
     is_teacher = current["role"] == "teacher"
 
+    _snap_dlg, _fs_dlg, show_snapshot = make_snapshot_dialogs()
+
     with ui.column().classes("w-full p-4 gap-4"):
         ui.label(
             "Detection History" if is_teacher else "My Detection History"
         ).classes("text-xl font-bold")
 
-        # ── Filter bar (teachers see all filters; students see fewer) ─────────
+        # ── Filter bar ────────────────────────────────────────────────────────
         with ui.card().classes("w-full"):
             with ui.row().classes("gap-4 flex-wrap items-end"):
 
@@ -71,19 +74,18 @@ def page_history() -> None:
                     "Max rows", value=200, min=10, max=5000,
                 ).props("dense outlined").classes("w-24")
 
-                ui.button("🔍 Search", on_click=lambda: _load()
-                          ).props("color=primary")
+                ui.button("🔍 Search", on_click=lambda: _load()).props("color=primary")
 
         # ── Table ─────────────────────────────────────────────────────────────
         base_cols = [
-            {"name": "detected_at",   "label": "Time",
-             "field": "detected_at",  "sortable": True, "align": "left"},
-            {"name": "had_detection", "label": "Hit",
-             "field": "had_detection","sortable": True, "align": "center"},
-            {"name": "detections",    "label": "Detections",
-             "field": "detections",   "sortable": False, "align": "left"},
-            {"name": "snapshot",      "label": "📷",
-             "field": "has_frame",    "sortable": False, "align": "center"},
+            {"name": "detected_at",    "label": "Time",
+             "field": "detected_at",   "sortable": True,  "align": "left"},
+            {"name": "had_detection",  "label": "Hit",
+             "field": "had_detection", "sortable": True,  "align": "center"},
+            {"name": "detections",     "label": "Detections",
+             "field": "detections",    "sortable": False, "align": "left"},
+            {"name": "snapshot",       "label": "📷",
+             "field": "has_frame",     "sortable": False, "align": "center"},
         ]
         if is_teacher:
             teacher_cols = [
@@ -99,7 +101,6 @@ def page_history() -> None:
         tbl = ui.table(columns=cols, rows=[], row_key="event_id").classes("w-full")
         tbl.props("dense flat bordered")
 
-        # Snapshot button slot
         tbl.add_slot("body-cell-snapshot", """
             <q-td :props="props">
                 <q-btn v-if="props.row.has_frame"
@@ -112,16 +113,7 @@ def page_history() -> None:
 
         count = ui.label("").classes("text-xs text-gray-500 mt-1")
 
-    # ── Snapshot dialog ───────────────────────────────────────────────────────
-    with ui.dialog() as snapshot_dialog, ui.card().classes(
-        "w-full items-center gap-2 p-2"
-    ).style("max-width: 900px;"):
-        snap_ts    = ui.label("").classes("text-xs text-gray-400")
-        snap_pc    = ui.label("").classes("text-xs text-gray-400")
-        snap_img   = ui.image("").classes("w-full rounded").style(
-            "max-height: 70vh; object-fit: contain; background: #111;")
-        snap_dets  = ui.label("").classes("font-mono text-sm text-blue-300")
-        ui.button("Close", on_click=snapshot_dialog.close).props("flat")
+    # ── Event handlers ────────────────────────────────────────────────────────
 
     def handle_view_frame(e) -> None:
         row = e.args
@@ -130,14 +122,12 @@ def page_history() -> None:
             return
         b64 = get_event_frame_b64(int(eid))
         if b64:
-            snap_img.set_source(b64)
-            snap_ts.set_text(f"Time: {row.get('detected_at', '')}")
-            snap_pc.set_text(
-                f"Computer: {row.get('computer', '—')}   "
-                f"Student: {row.get('student', '—')}"
+            meta = (
+                f"{row.get('detected_at', '')}  •  "
+                f"{row.get('computer', '—')}  •  "
+                f"{row.get('student', '—')}"
             )
-            snap_dets.set_text(row.get("detections") or "— no detections —")
-            snapshot_dialog.open()
+            show_snapshot(b64, meta)
         else:
             ui.notify("No snapshot stored for this event", type="info")
 
@@ -153,7 +143,6 @@ def page_history() -> None:
             comp_id  = int(f_computer.value) if f_computer.value else None
             user_id_ = int(f_student.value)  if f_student.value  else None
         else:
-            # Students always see only their own records
             user_id_ = current["id"]
 
         rows = query_events(

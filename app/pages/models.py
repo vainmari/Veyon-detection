@@ -48,7 +48,7 @@ from app.services.training_service import (
 
 @ui.page("/models")
 def page_models() -> None:
-    current = require_auth(required_role="admin")
+    current = require_auth(required_role="teacher_or_admin")
     if current is None:
         return
     nav(current)
@@ -154,6 +154,24 @@ def _gpu_card() -> None:
                 drain_t = ui.timer(0.5, _drain)
 
             install_btn.on_click(do_install)
+
+
+# ── Shared helpers ────────────────────────────────────────────────────────────
+
+def _parse_class_names(raw: str) -> list[str]:
+    """Accept comma-separated text or a YAML names block, return a clean list."""
+    raw = raw.strip()
+    if not raw:
+        return []
+    try:
+        parsed = yaml.safe_load(raw)
+        if isinstance(parsed, dict) and "names" in parsed:
+            return [str(n) for n in parsed["names"]]
+        if isinstance(parsed, list):
+            return [str(n) for n in parsed]
+    except Exception:
+        pass
+    return [n.strip() for n in raw.split(",") if n.strip()]
 
 
 # ── Model library ─────────────────────────────────────────────────────────────

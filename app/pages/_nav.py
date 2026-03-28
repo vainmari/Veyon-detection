@@ -6,7 +6,7 @@ Shared navigation bar — role-aware.
 Roles
 ─────
   admin   — Users + Models only
-  teacher — Dashboard, History, Analytics, Alert Rules, Users, Settings
+  teacher — Dashboard, History, Analytics, Alert Rules, Users, Models, Settings
             + Start/Stop monitor + notification bell
   student — My History, My Analytics
 """
@@ -16,12 +16,12 @@ from nicegui import app as nicegui_app, ui
 
 import app.state as state
 from app.core.auth import clear_session
+from app.pages._snapshot import make_snapshot_dialogs
 
 
 def nav(current_user: dict) -> None:
     role = current_user["role"]
 
-    # Restore persisted dark-mode preference
     dark = ui.dark_mode()
     saved = nicegui_app.storage.user.get("dark_mode", True)
     dark.enable() if saved else dark.disable()
@@ -31,12 +31,8 @@ def nav(current_user: dict) -> None:
     ):
         ui.label("🎓 Veyon AI Monitor").classes("font-bold text-base mr-2")
 
-        # ── Navigation links ──────────────────────────────────────────────────
         if role == "admin":
-            for label, path in [
-                ("Users",  "/users"),
-                ("Models", "/models"),
-            ]:
+            for label, path in [("Users", "/users"), ("Models", "/models")]:
                 ui.link(label, path).classes(
                     "text-gray-300 hover:text-white text-sm no-underline")
 
@@ -47,7 +43,7 @@ def nav(current_user: dict) -> None:
                 ("Analytics",   "/analytics"),
                 ("Alert Rules", "/alerts"),
                 ("Users",       "/users"),
-                ("Models", "/models"),
+                ("Models",      "/models"),
                 ("Settings",    "/settings"),
             ]:
                 ui.link(label, path).classes(
@@ -61,7 +57,6 @@ def nav(current_user: dict) -> None:
                 ui.link(label, path).classes(
                     "text-gray-300 hover:text-white text-sm no-underline")
 
-        # ── Monitor Start / Stop (teacher only) ───────────────────────────────
         if role == "teacher":
             ui.separator().props("vertical").classes("mx-1 opacity-30")
             status_dot = ui.label("").classes("text-xs font-mono")
@@ -109,40 +104,28 @@ def nav(current_user: dict) -> None:
             _sync_buttons()
             ui.timer(1.0, _sync_buttons)
 
-        # ── Right side: bell (teacher) + user menu (everyone) ─────────────────
         with ui.row().classes("ml-auto items-center gap-2"):
             if role == "teacher":
                 _notification_bell()
                 ui.separator().props("vertical").classes("opacity-30")
-
             _user_menu(current_user, dark)
 
 
 # ── User menu ─────────────────────────────────────────────────────────────────
 
 def _user_menu(current_user: dict, dark) -> None:
-    """
-    Dropdown showing username (role) with three items:
-      • Dark mode toggle
-      • Change password
-      • Sign out
-    """
     role = current_user["role"]
 
-    # Change-password dialog
     with ui.dialog() as pwd_dlg, ui.card().classes("p-5 gap-3 w-80"):
         ui.label("Change Password").classes("text-base font-bold")
         current_pw = ui.input(
-            "Current password",
-            password=True, password_toggle_button=True,
+            "Current password", password=True, password_toggle_button=True,
         ).props("dense outlined").classes("w-full")
         new_pw = ui.input(
-            "New password",
-            password=True, password_toggle_button=True,
+            "New password", password=True, password_toggle_button=True,
         ).props("dense outlined").classes("w-full")
         confirm_pw = ui.input(
-            "Confirm new password",
-            password=True, password_toggle_button=True,
+            "Confirm new password", password=True, password_toggle_button=True,
         ).props("dense outlined").classes("w-full")
         err_lbl = ui.label("").classes("text-red-400 text-sm")
 
@@ -159,23 +142,19 @@ def _user_menu(current_user: dict, dark) -> None:
                 return
             update_password(current_user["id"], new_pw.value)
             pwd_dlg.close()
-            current_pw.set_value("")
-            new_pw.set_value("")
-            confirm_pw.set_value("")
-            err_lbl.set_text("")
+            current_pw.set_value(""); new_pw.set_value("")
+            confirm_pw.set_value(""); err_lbl.set_text("")
             ui.notify("✅ Password changed.", type="positive")
 
         with ui.row().classes("gap-2"):
-            ui.button("Save", on_click=do_change).props("color=primary dense")
+            ui.button("Save",   on_click=do_change).props("color=primary dense")
             ui.button("Cancel", on_click=pwd_dlg.close).props("flat dense")
 
-    # Dropdown button
     label_text = f"{current_user['username']}  ({role})"
     with ui.dropdown_button(
         label_text, icon="account_circle",
     ).props("flat no-caps dense color=white"):
 
-        # Dark mode row
         with ui.menu_item():
             with ui.row().classes("items-center gap-3 w-full"):
                 ui.icon("dark_mode").classes("text-base")
@@ -216,26 +195,17 @@ def _notification_bell() -> None:
         mark_read,
     )
 
-    # Snapshot viewer dialog
-    with ui.dialog() as snap_dlg, \
-         ui.card().classes("p-3 gap-2").style("max-width:900px; width:95vw;"):
-        snap_meta  = ui.label("").classes("text-xs text-gray-400 font-mono")
-        snap_image = ui.image("").classes("w-full rounded").style(
-            "max-height:70vh; object-fit:contain; background:#111;")
-        ui.button("Close", on_click=snap_dlg.close).props("flat dense")
+    _snap_dlg, _fs_dlg, show_snapshot = make_snapshot_dialogs()
 
-    # Notification list dialog
+    # ── Notification list dialog ──────────────────────────────────────────────
     with ui.dialog().props("position=right") as notif_dlg, \
          ui.card().classes("p-0 h-full rounded-none").style(
              "width:400px; max-width:95vw;"):
-        with ui.row().classes(
-            "items-center justify-between px-4 py-3 w-full"
-        ):
+        with ui.row().classes("items-center justify-between px-4 py-3 w-full"):
             ui.label("Notifications").classes("text-base font-bold")
             ui.button(
                 "Mark all read",
-                on_click=lambda: (
-                    mark_all_read(), _reload(), _refresh_badge()),
+                on_click=lambda: (mark_all_read(), _reload(), _refresh_badge()),
             ).props("flat dense size=sm color=gray")
         ui.separator()
         scroll = ui.scroll_area().classes("w-full").style(
@@ -247,8 +217,7 @@ def _notification_bell() -> None:
             items = list_notifications(limit=60)
             if not items:
                 with ui.column().classes("items-center w-full p-10 gap-3"):
-                    ui.icon("notifications_none").classes(
-                        "text-5xl text-gray-600")
+                    ui.icon("notifications_none").classes("text-5xl text-gray-600")
                     ui.label("All clear — no alerts yet").classes(
                         "text-gray-500 text-sm")
                 return
@@ -269,20 +238,17 @@ def _notification_bell() -> None:
                 with ui.column().classes("gap-1 flex-1 min-w-0"):
                     with ui.row().classes("items-center gap-2 flex-wrap"):
                         ui.badge(n["class_name"]).props("rounded").style(
-                            f"background:{color}; color:#fff; "
-                            f"font-size:0.68rem;")
+                            f"background:{color}; color:#fff; font-size:0.68rem;")
                         if is_new:
                             ui.badge("NEW").props("rounded color=orange")
-                    ui.label(f"🖥  {n['computer']}").classes(
-                        "text-xs text-gray-300")
-                    ui.label(f"👤 {n['student']}").classes(
-                        "text-xs text-gray-300")
+                    ui.label(f"🖥  {n['computer']}").classes("text-xs text-gray-300")
+                    ui.label(f"👤 {n['student']}").classes("text-xs text-gray-300")
                     ui.label(n["created_at"]).classes("text-xs text-gray-500")
 
                 if n.get("has_frame"):
                     meta_str = (
-                        f"{n['class_name']}  •  {n['computer']}  "
-                        f"•  {n['student']}  •  {n['created_at']}"
+                        f"{n['class_name']}  •  {n['computer']}"
+                        f"  •  {n['student']}  •  {n['created_at']}"
                     )
 
                     def _view(
@@ -293,12 +259,9 @@ def _notification_bell() -> None:
                         _reload()
                         b64 = get_event_frame_b64(eid)
                         if b64:
-                            snap_image.set_source(b64)
-                            snap_meta.set_text(meta)
-                            snap_dlg.open()
+                            show_snapshot(b64, meta)
                         else:
-                            ui.notify("Snapshot not available",
-                                      type="warning")
+                            ui.notify("Snapshot not available", type="warning")
 
                     ui.button(icon="image", on_click=_view).props(
                         "flat round dense color=blue"
@@ -308,9 +271,9 @@ def _notification_bell() -> None:
         _reload()
         notif_dlg.open()
 
-    with ui.button(
-        icon="notifications", on_click=_open_notifs,
-    ).props("flat round color=white"):
+    with ui.button(icon="notifications", on_click=_open_notifs).props(
+        "flat round color=white"
+    ):
         badge = ui.badge("").props("floating color=red transparent")
 
     _prev = [0]

@@ -6,6 +6,14 @@ drain_worker       — drains queues into global state (no DB writes here).
 
 DB writes happen inside the detect worker so each frame → event is atomic.
 Frames are stored as JPEG BLOBs directly in the database (no disk I/O).
+
+Queue discipline
+────────────────
+  _raw_q  (maxsize=128) — back-pressure on I/O threads; oldest work dropped
+                          when full via put(timeout=1.0).
+  state.img_q (maxsize=64) — bounded; detect worker uses put_nowait and drops
+                              frames silently if drain_worker falls behind.
+                              This prevents unbounded memory growth under load.
 """
 from __future__ import annotations
 
@@ -41,12 +49,11 @@ def _parse_win_username(raw: str) -> str:
 class MonitorController:
 
     def __init__(self, cfg: dict) -> None:
-        self.cfg    = cfg
-        self._stop  = threading.Event()
+        self.cfg   = cfg
+        self._stop = threading.Event()
         self._proc: Optional[object] = None
+        # raw_q carries (computer_name, raw_jpeg_bytes) decoded in detect worker
         self._raw_q: queue.Queue[tuple[str, bytes]] = queue.Queue(maxsize=128)
-        # raw_q carries (computer_name, raw_jpeg_bytes) —
-        # decoded in the detect worker to keep IO threads lightweight
 
     # ── Public ────────────────────────────────────────────────────────────────
 
@@ -57,8 +64,14 @@ class MonitorController:
     def stop(self) -> None:
         self._stop.set()
         if self._proc:
-            try:   self._proc.terminate(); self._proc.wait(3)
-            except Exception: self._proc.kill()
+            try:
+                self._proc.terminate()
+                self._proc.wait(3)
+            except Exception:
+                try:
+                    self._proc.kill()
+                except Exception:
+                    pass
             self._proc = None
 
     # ── Logging ───────────────────────────────────────────────────────────────
@@ -73,7 +86,8 @@ class MonitorController:
         try:
             key_data = Path(cfg["key_path"]).read_text(encoding="utf-8").strip()
         except OSError as e:
-            self._log(f"❌ Cannot read key file: {e}"); return
+            self._log(f"❌ Cannot read key file: {e}")
+            return
 
         base_url = WEBAPI_BASE_TPL.format(host=cfg["host"], port=cfg["port"])
 
@@ -84,12 +98,16 @@ class MonitorController:
                 self._log("🚀 Launching Veyon WebAPI server…")
                 proc = veyon.launch_webapi_server(cfg["veyon_cli"])
                 if not proc:
-                    self._log("❌ Failed to launch veyon-cli — check path in Settings"); return
+                    self._log(
+                        "❌ Failed to launch veyon-cli — check path in Settings")
+                    return
                 self._proc = proc
                 for _ in range(cfg["start_wait"]):
-                    if self._stop.is_set(): return
+                    if self._stop.is_set():
+                        return
                     if veyon.is_port_open(cfg["host"], cfg["port"]):
-                        self._log("✅ WebAPI online"); break
+                        self._log("✅ WebAPI online")
+                        break
                     time.sleep(1)
                 else:
                     self._log("⚠️  WebAPI not responding — check Veyon logs")
@@ -99,21 +117,24 @@ class MonitorController:
             yolo.get_model(cfg["model_path"])
             self._log("✅ Model ready")
         except Exception as e:
-            self._log(f"❌ Model load failed: {e}"); return
+            self._log(f"❌ Model load failed: {e}")
+            return
 
         self._log("Discovering computers…")
         try:
             computers = veyon.discover_computers(cfg["veyon_cli"])
         except Exception as e:
-            self._log(f"❌ Discovery failed: {e}"); return
+            self._log(f"❌ Discovery failed: {e}")
+            return
 
         if not computers:
-            self._log("No computers found — add them in Veyon Configurator"); return
+            self._log(
+                "No computers found — add them in Veyon Configurator")
+            return
 
         self._log(f"Found {len(computers)} computer(s):")
         for c in computers:
             self._log(f"  • {c['name']}  ({c['host']})")
-            # Register computer in DB and cache its id immediately
             cid = upsert_computer(c["name"], c["host"])
             state.computer_ids[c["name"]] = cid
 
@@ -131,14 +152,16 @@ class MonitorController:
 
     # ── Per-computer I/O worker ───────────────────────────────────────────────
 
-    def _io_worker(self, name: str, host: str, key_data: str, base_url: str) -> None:
+    def _io_worker(
+        self, name: str, host: str, key_data: str, base_url: str
+    ) -> None:
         """
         Pure network thread: authenticate, grab framebuffer, fetch logged-in
         Windows username, push raw JPEG bytes onto _raw_q.
         No decoding or inference happens here.
         """
-        cfg     = self.cfg
-        session = requests.Session()
+        cfg      = self.cfg
+        session  = requests.Session()
         session.headers["Connection"] = "keep-alive"
         conn_uid: Optional[str] = None
 
@@ -151,21 +174,19 @@ class MonitorController:
                 )
                 if conn_uid is None:
                     self._log(f"[{name}] Auth error — retry in 10 s")
-                    self._stop.wait(10); continue
+                    self._stop.wait(10)
+                    continue
                 time.sleep(2)
 
-            # Grab framebuffer FIRST — user fetch comes after so it
-            # cannot interfere with the VNC session on the same connection.
             raw = veyon.grab_framebuffer(
                 session, base_url, conn_uid,
                 cfg["img_fmt"], cfg["img_quality"], cfg["img_width"],
             )
             if raw is None:
                 self._log(f"[{name}] Framebuffer failed — re-authenticating")
-                conn_uid = None; continue
+                conn_uid = None
+                continue
 
-            # Now safely fetch the logged-in Windows username.
-            # Parse "COMPUTER\username" → "username"
             win_login_raw = veyon.get_logged_user(session, base_url, conn_uid)
             if win_login_raw:
                 win_login = _parse_win_username(win_login_raw)
@@ -175,7 +196,7 @@ class MonitorController:
                 if not db_user:
                     self._log(
                         f"[{name}] Windows user '{win_login}' — "
-                        f"no system account yet (events logged with username)"
+                        "no system account yet (events logged with username)"
                     )
             else:
                 state.computer_users[name]         = None
@@ -204,14 +225,16 @@ class MonitorController:
             try:
                 while len(raw_batch) < max_b:
                     n, raw = self._raw_q.get(timeout=0.05)
-                    raw_batch.append(raw); name_batch.append(n)
+                    raw_batch.append(raw)
+                    name_batch.append(n)
             except queue.Empty:
-                if not raw_batch: continue
+                if not raw_batch:
+                    continue
 
             # Decode all images in batch
-            imgs = []
-            valid_names = []
-            valid_raws  = []
+            imgs         = []
+            valid_names  = []
+            valid_raws   = []
             for n, raw in zip(name_batch, raw_batch):
                 img = veyon.decode_image(raw)
                 if img is not None:
@@ -231,7 +254,7 @@ class MonitorController:
                     verbose=False, device=device, rect=True,
                 )
 
-                for name, res, img_bgr in zip(valid_names, results, imgs):
+                for comp_name, res, img_bgr in zip(valid_names, results, imgs):
                     annotated, dets = postprocess(
                         res, img_bgr, bool(cfg["keep_top1"])
                     )
@@ -242,10 +265,10 @@ class MonitorController:
                     )
                     frame_bytes = buf.tobytes() if ok else None
 
-                    # Write event + detections to DB
-                    computer_id = state.computer_ids.get(name)
-                    user_id     = state.computer_users.get(name)
-                    win_uname   = state.computer_win_usernames.get(name)
+                    computer_id = state.computer_ids.get(comp_name)
+                    user_id     = state.computer_users.get(comp_name)
+                    win_uname   = state.computer_win_usernames.get(comp_name)
+
                     if computer_id is not None:
                         ev_id = insert_event(
                             computer_id, dets,
@@ -253,40 +276,42 @@ class MonitorController:
                             windows_username=win_uname,
                             frame_bytes=frame_bytes,
                         )
-                        # Resolve student display name for notifications
                         student_disp = win_uname or "—"
                         if user_id:
                             u = get_user_by_id(user_id)
                             if u:
                                 student_disp = u["username"]
-                        # Fire alert notifications for prohibited classes
                         n_fired = alert_service.check_and_fire(
-                            ev_id, dets, name, student_disp
+                            ev_id, dets, comp_name, student_disp
                         )
                         if n_fired:
                             self._log(
-                                f"[{name}] 🔔 {n_fired} alert(s) fired "
+                                f"[{comp_name}] 🔔 {n_fired} alert(s) fired "
                                 f"({student_disp})"
                             )
 
-                    # Push to live preview queue
-                    state.img_q.put((name, annotated, dets))
+                    # Push to live preview queue — drop silently if full
+                    try:
+                        state.img_q.put_nowait((comp_name, annotated, dets))
+                    except queue.Full:
+                        pass
 
                     if dets:
                         self._log(
-                            f"[{name}] " +
+                            f"[{comp_name}] " +
                             ", ".join(
-                                f"{d['class_name']}({d['conf']:.0%})" for d in dets
+                                f"{d['class_name']}({d['conf']:.0%})"
+                                for d in dets
                             )
                         )
                     else:
-                        self._log(f"[{name}] no detections")
+                        self._log(f"[{comp_name}] no detections")
 
             except Exception as e:
                 self._log(f"❌ Detection error: {e}")
 
 
-# ─── Background drain worker ──────────────────────────────────────────────────
+# ── Background drain worker ───────────────────────────────────────────────────
 
 def drain_worker() -> None:
     """

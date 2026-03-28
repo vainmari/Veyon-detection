@@ -47,6 +47,7 @@ def nav(current_user: dict) -> None:
                 ("Analytics",   "/analytics"),
                 ("Alert Rules", "/alerts"),
                 ("Users",       "/users"),
+                ("Models", "/models"),
                 ("Settings",    "/settings"),
             ]:
                 ui.link(label, path).classes(

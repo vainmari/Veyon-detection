@@ -26,7 +26,6 @@ def page_dashboard() -> None:
         # ── Left column ───────────────────────────────────────────────────────
         with ui.column().classes("flex-1 gap-3 min-w-0"):
 
-            # Control bar
             with ui.card().classes("w-full"):
                 with ui.row().classes("items-center gap-3 flex-wrap"):
                     running = state.monitor is not None
@@ -34,7 +33,9 @@ def page_dashboard() -> None:
                         "● Running" if running else "● Stopped"
                     ).classes(
                         "font-mono text-sm " +
-                        ("text-green-400" if running else "text-red-400")
+                        ("text-green-500 dark:text-green-400"
+                         if running else
+                         "text-red-500 dark:text-red-400")
                     )
                     btn_start = ui.button("▶  Start", color="green")
                     btn_stop  = ui.button("■  Stop",  color="red")
@@ -44,36 +45,41 @@ def page_dashboard() -> None:
                         btn_stop.props("disable")
 
                     with ui.row().classes("items-center gap-2 ml-auto"):
-                        ui.label("Computer:").classes("text-sm text-gray-400")
+                        ui.label("Computer:").classes(
+                            "text-sm text-gray-500 dark:text-gray-400")
                         pc_sel = ui.select(
                             options=list(state.latest_frames.keys()),
                             value=next(iter(state.latest_frames), None),
                         ).props("dense outlined").classes("w-48")
 
-            # Live image — full width, natural height, no crop
             with ui.card().classes("w-full"):
-                ui.label("Live Preview").classes("text-xs text-gray-400 mb-1")
+                ui.label("Live Preview").classes(
+                    "text-xs text-gray-500 dark:text-gray-400 mb-1")
                 live_img = ui.image("").classes("w-full rounded").style(
                     "background:#111; display:block;"
                 )
 
-            # Active student indicator
             with ui.card().classes("w-full"):
                 with ui.row().classes("items-center gap-4"):
                     with ui.column().classes("gap-0"):
-                        ui.label("Active Student").classes("text-xs text-gray-400")
+                        ui.label("Active Student").classes(
+                            "text-xs text-gray-500 dark:text-gray-400")
                         student_lbl = ui.label("—").classes(
-                            "font-mono text-sm text-yellow-300")
+                            "font-mono text-sm "
+                            "text-yellow-600 dark:text-yellow-300")
                     ui.separator().props("vertical")
                     with ui.column().classes("gap-0"):
-                        ui.label("Last Detections").classes("text-xs text-gray-400")
+                        ui.label("Last Detections").classes(
+                            "text-xs text-gray-500 dark:text-gray-400")
                         det_info = ui.label("— no detections —").classes(
-                            "font-mono text-sm text-blue-300")
+                            "font-mono text-sm "
+                            "text-blue-600 dark:text-blue-300")
 
         # ── Right column: console ─────────────────────────────────────────────
         with ui.card().classes("w-80 flex-shrink-0"):
             with ui.row().classes("items-center justify-between mb-1"):
-                ui.label("Console").classes("text-xs text-gray-400")
+                ui.label("Console").classes(
+                    "text-xs text-gray-500 dark:text-gray-400")
                 ui.button(
                     "Clear",
                     on_click=lambda: (
@@ -82,7 +88,9 @@ def page_dashboard() -> None:
                     ),
                 ).props("flat dense size=xs")
             log_view = ui.log(max_lines=400).classes(
-                "w-full font-mono text-xs bg-gray-950 text-green-300 rounded"
+                "w-full font-mono text-xs rounded "
+                "bg-gray-100 text-green-700 "
+                "dark:bg-gray-950 dark:text-green-300"
             ).style("height: 560px;")
 
     log_offset = [0]
@@ -102,7 +110,8 @@ def page_dashboard() -> None:
         btn_start.props("disable")
         btn_stop.props(remove="disable")
         status_lbl.set_text("● Running")
-        status_lbl.classes(replace="font-mono text-sm text-green-400")
+        status_lbl.classes(
+            replace="font-mono text-sm text-green-500 dark:text-green-400")
 
     def do_stop() -> None:
         if state.monitor:
@@ -111,7 +120,8 @@ def page_dashboard() -> None:
         btn_start.props(remove="disable")
         btn_stop.props("disable")
         status_lbl.set_text("● Stopped")
-        status_lbl.classes(replace="font-mono text-sm text-red-400")
+        status_lbl.classes(
+            replace="font-mono text-sm text-red-500 dark:text-red-400")
 
     btn_start.on_click(do_start)
     btn_stop.on_click(do_stop)
@@ -136,7 +146,6 @@ def page_dashboard() -> None:
             b64, dets = state.latest_frames[sel]
             live_img.set_source(b64)
 
-            # Show active student for selected computer
             uid = state.computer_users.get(sel)
             if uid:
                 from app.db.database import get_user_by_id
@@ -146,7 +155,8 @@ def page_dashboard() -> None:
                 student_lbl.set_text("— not matched —")
 
             det_info.set_text(
-                "  |  ".join(f"{d['class_name']} {d['conf']:.0%}" for d in dets)
+                "  |  ".join(
+                    f"{d['class_name']} {d['conf']:.0%}" for d in dets)
                 if dets else "— no detections —"
             )
 

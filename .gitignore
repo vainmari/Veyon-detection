@@ -11,4 +11,19 @@
 *.db
 
 # Ignore Python compiled files
-*.pyc
+**/*.pyc
+**/__pycache__/
+
+# Runtime data
+data/
+runs/
+
+# NiceGUI persistent storage
+.nicegui/
+
+# Virtual environment
+.venv/
+
+# Weight files
+*.pt
+*.onnx

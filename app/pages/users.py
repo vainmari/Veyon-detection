@@ -2,12 +2,8 @@
 app/pages/users.py
 ──────────────────
 User management page  /users  (teacher + admin)
-
-Role capabilities
-─────────────────
-  admin   — sees all users; create/delete teacher + student; cannot delete self
-  teacher — sees students + other teachers (read-only); create/delete students
 """
+import asyncio
 from nicegui import ui
 
 from app.core.auth import is_admin, require_auth
@@ -32,7 +28,11 @@ def page_users() -> None:
         ui.label("User Management").classes("text-xl font-bold")
 
         # ── Info banner ───────────────────────────────────────────────────────
-        with ui.card().classes("w-full bg-blue-950 border border-blue-700"):
+        with ui.card().classes(
+            "w-full "
+            "bg-blue-50 border border-blue-300 "
+            "dark:bg-blue-950 dark:border-blue-700"
+        ):
             ui.markdown(
                 "**Student usernames must match their Windows login name** "
                 "(e.g. `Lina` — the part after the backslash).  \n"
@@ -44,12 +44,12 @@ def page_users() -> None:
                     if admin else
                     "As **teacher** you can create and delete student accounts."
                 )
-            ).classes("text-sm text-blue-200")
+            ).classes("text-sm text-blue-900 dark:text-blue-200")
 
         # ── Create user form ──────────────────────────────────────────────────
         with ui.card().classes("w-full"):
             ui.label("Create Account").classes(
-                "text-sm font-semibold text-gray-400 mb-2")
+                "text-sm font-semibold text-gray-600 dark:text-gray-400 mb-2")
             with ui.row().classes("gap-3 items-end flex-wrap"):
                 new_username = ui.input("Username").props(
                     "dense outlined").classes("w-52")
@@ -59,14 +59,14 @@ def page_users() -> None:
                     password_toggle_button=True,
                 ).props("dense outlined").classes("w-52")
 
-                # Admins can choose any role; teachers can only create students
                 if admin:
                     new_role = ui.select(
                         {"student": "Student", "teacher": "Teacher"},
                         value="student", label="Role",
                     ).props("dense outlined").classes("w-32")
                     role_hint = ui.label("Windows login name for students"
-                                        ).classes("text-xs text-gray-500 self-end pb-1")
+                                        ).classes(
+                        "text-xs text-gray-500 dark:text-gray-500 self-end pb-1")
 
                     def _update_hint() -> None:
                         role_hint.set_text(
@@ -75,39 +75,57 @@ def page_users() -> None:
                         )
                     new_role.on_value_change(lambda _: _update_hint())
 
-                form_msg = ui.label("").classes("text-sm")
+                form_msg   = ui.label("").classes("text-sm")
+                create_btn = ui.button("Create").props("color=primary dense")
 
-                def do_create() -> None:
+                async def do_create() -> None:
                     uname = new_username.value.strip()
                     pwd   = new_password.value.strip()
                     role  = new_role.value if admin else "student"
+
                     if not uname or not pwd:
                         form_msg.set_text("Fill in both fields")
-                        form_msg.classes(replace="text-sm text-red-400")
+                        form_msg.classes(replace="text-sm text-red-500")
                         return
+
+                    create_btn.props("disable")
+                    form_msg.set_text("Creating…")
+                    form_msg.classes(
+                        replace="text-sm text-gray-500 dark:text-gray-400")
+
+                    loop = asyncio.get_event_loop()
                     try:
-                        new_uid = create_user(
-                            uname, pwd, role,
-                            created_by_id=current["id"],
+                        new_uid = await loop.run_in_executor(
+                            None, lambda: create_user(
+                                uname, pwd, role,
+                                created_by_id=current["id"],
+                            )
                         )
                         if role == "student":
-                            assigned = len(query_events(user_id=new_uid))
-                            suffix   = (f" — {assigned} previous event(s) "
-                                        "auto-assigned" if assigned else "")
+                            assigned = await loop.run_in_executor(
+                                None, lambda: len(query_events(user_id=new_uid))
+                            )
+                            suffix = (
+                                f" — {assigned} previous event(s) auto-assigned"
+                                if assigned else ""
+                            )
                             form_msg.set_text(
                                 f"✅ Student '{uname}' created{suffix}")
                         else:
-                            form_msg.set_text(
-                                f"✅ Teacher '{uname}' created")
-                        form_msg.classes(replace="text-sm text-green-400")
+                            form_msg.set_text(f"✅ Teacher '{uname}' created")
+
+                        form_msg.classes(replace="text-sm text-green-600")
                         new_username.set_value("")
                         new_password.set_value("")
-                        _refresh()
+                        await loop.run_in_executor(None, _refresh)
+
                     except Exception as e:
                         form_msg.set_text(f"Error: {e}")
-                        form_msg.classes(replace="text-sm text-red-400")
+                        form_msg.classes(replace="text-sm text-red-500")
+                    finally:
+                        create_btn.props(remove="disable")
 
-                ui.button("Create", on_click=do_create).props("color=primary dense")
+                create_btn.on_click(do_create)
 
         # ── User table ────────────────────────────────────────────────────────
         cols = [
@@ -133,7 +151,6 @@ def page_users() -> None:
         """)
 
         if admin:
-            # Admins can delete anyone except themselves and other admins
             tbl.add_slot("body-cell-actions", """
                 <q-td :props="props">
                     <q-btn
@@ -144,7 +161,6 @@ def page_users() -> None:
                 </q-td>
             """)
         else:
-            # Teachers can only delete students
             tbl.add_slot("body-cell-actions", """
                 <q-td :props="props">
                     <q-btn
@@ -155,28 +171,32 @@ def page_users() -> None:
                 </q-td>
             """)
 
-        def handle_delete(e) -> None:
+        async def handle_delete(e) -> None:
             row  = e.args
             uid  = row.get("id")
             role = row.get("role", "")
             if not uid or int(uid) == current["id"]:
                 return
-            # Admins can delete teachers + students; teachers can only delete students
-            if admin and role in ("teacher", "student"):
-                delete_user(int(uid))
+            can_delete = (
+                (admin and role in ("teacher", "student")) or
+                (not admin and role == "student")
+            )
+            if not can_delete:
+                return
+            loop = asyncio.get_event_loop()
+            try:
+                await loop.run_in_executor(
+                    None, lambda: delete_user(int(uid))
+                )
                 ui.notify("User deleted", type="warning")
-                _refresh()
-            elif not admin and role == "student":
-                delete_user(int(uid))
-                ui.notify("Student deleted", type="warning")
-                _refresh()
+                await loop.run_in_executor(None, _refresh)
+            except Exception as ex:
+                ui.notify(f"Delete failed: {ex}", type="negative")
 
         tbl.on("delete_user", handle_delete)
 
     def _refresh() -> None:
-        rows = list_users()
-        # Teachers see everyone; no filter needed (they can see teachers read-only)
-        tbl.rows = rows
+        tbl.rows = list_users()
         tbl.update()
 
     _refresh()

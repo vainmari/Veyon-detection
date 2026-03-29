@@ -103,7 +103,7 @@ def _gpu_card() -> None:
                 "The button below uninstalls the CPU build and installs the "
                 "CUDA build (~2.4 GB). The server keeps running during the "
                 "download and restarts automatically when done."
-            ).classes("text-sm text-gray-400 mt-2")
+            ).classes("text-sm text-gray-600 dark:text-gray-400 mt-2")
 
             spinner     = ui.spinner("dots", size="sm").classes("mt-2")
             spinner.set_visibility(False)
@@ -199,10 +199,11 @@ def _model_library() -> None:
         imp_file = {"data": None, "name": ""}
 
         with ui.card().classes(
-            "w-full bg-gray-800 border border-dashed border-gray-500"
+            "w-full bg-gray-50 border border-dashed border-gray-300 "
+            "dark:bg-gray-800 dark:border-gray-500"
         ):
             ui.label("Option A — Upload .onnx / .pt").classes(
-                "text-xs text-gray-400 mb-1")
+                "text-xs text-gray-500 dark:text-gray-400 mb-1")
 
             async def handle_model_upload(e: events.UploadEventArguments) -> None:
                 raw  = await e.file.read()
@@ -220,9 +221,9 @@ def _model_library() -> None:
 
         ui.label("— or —").classes("text-center text-gray-500 text-xs my-1")
 
-        with ui.card().classes("w-full bg-gray-800"):
+        with ui.card().classes("w-full bg-gray-50 dark:bg-gray-800"):
             ui.label("Option B — Server path").classes(
-                "text-xs text-gray-400 mb-1")
+                "text-xs text-gray-500 dark:text-gray-400 mb-1")
             imp_path = ui.input(
                 placeholder="e.g. weights/ONNX_FP32.onnx"
             ).props("dense outlined").classes("w-full")
@@ -252,7 +253,7 @@ def _model_library() -> None:
                     )
                 ).props("dense outlined rows=4").classes("w-full font-mono text-xs")
                 ui.label("Comma-separated or YAML names block"
-                         ).classes("text-xs text-gray-500")
+                         ).classes("text-xs text-gray-500 dark:text-gray-500")
 
         ui.label("Metrics (optional)").classes("text-xs text-gray-400 mt-2")
         with ui.row().classes("gap-3 flex-wrap"):
@@ -359,7 +360,7 @@ def _model_library() -> None:
                     "dense outlined rows=4"
                 ).classes("w-full font-mono text-xs")
                 ui.label("Comma-separated or YAML names block"
-                         ).classes("text-xs text-gray-500")
+                         ).classes("text-xs text-gray-500 dark:text-gray-500")
 
         ui.label("Metrics").classes("text-xs text-gray-400 mt-2")
         with ui.row().classes("gap-3 flex-wrap"):
@@ -633,9 +634,10 @@ def _step_upload(ws: dict, refresh) -> None:
         upload_ref = {"data": None, "name": ""}
 
         with ui.card().classes(
-            "w-full bg-gray-800 border border-dashed border-gray-500"
+            "w-full bg-gray-50 border border-dashed border-gray-300 "
+            "dark:bg-gray-800 dark:border-gray-500"
         ):
-            ui.label("Option A — Upload ZIP").classes("text-xs text-gray-400 mb-2")
+            ui.label("Option A — Upload ZIP").classes("text-xs text-gray-500 dark:text-gray-400 mb-2")
 
             async def handle_upload(e: events.UploadEventArguments) -> None:
                 raw  = await e.file.read()
@@ -653,9 +655,9 @@ def _step_upload(ws: dict, refresh) -> None:
 
         ui.label("— or —").classes("text-center text-gray-500 text-sm my-1")
 
-        with ui.card().classes("w-full bg-gray-800"):
+        with ui.card().classes("w-full bg-gray-50 dark:bg-gray-800"):
             ui.label("Option B — Local server path to extracted dataset"
-                     ).classes("text-xs text-gray-400 mb-1")
+                     ).classes("text-xs text-gray-500 dark:text-gray-400 mb-1")
             path_input = ui.input(
                 placeholder="e.g. C:/datasets/my_dataset"
             ).props("dense outlined").classes("w-full")
@@ -717,15 +719,16 @@ def _step_analysis(ws: dict, refresh) -> None:
                 ui.badge(fmt, color=fmt_color).classes("text-sm mt-1")
             if fmt == "COCO":
                 with ui.card().classes(
-                    "bg-orange-950 border border-orange-700 px-4 py-3"
+                    "bg-orange-50 border border-orange-300 px-4 py-3 "
+                    "dark:bg-orange-950 dark:border-orange-700"
                 ):
                     ui.label("COCO → YOLO").classes(
-                        "text-xs text-orange-300 font-semibold")
+                        "text-xs text-orange-700 dark:text-orange-300 font-semibold")
                     ui.label("Converted automatically").classes(
-                        "text-xs text-orange-200")
+                        "text-xs text-orange-600 dark:text-orange-200")
 
         with ui.card().classes("w-full"):
-            ui.label("Splits").classes("text-sm font-semibold text-gray-400 mb-2")
+            ui.label("Splits").classes("text-sm font-semibold text-gray-600 dark:text-gray-400 mb-2")
             with ui.row().classes("gap-4 flex-wrap"):
                 for split, info in a["splits"].items():
                     with ui.card().classes("bg-gray-800 px-3 py-2 min-w-28"):
@@ -736,7 +739,7 @@ def _step_analysis(ws: dict, refresh) -> None:
         cc = a["class_counts"]
         with ui.card().classes("w-full"):
             ui.label("Class Distribution").classes(
-                "text-sm font-semibold text-gray-400 mb-2")
+                "text-sm font-semibold text-gray-600 dark:text-gray-400 mb-2")
             ui.echart({
                 "tooltip": {"trigger": "axis",
                             "axisPointer": {"type": "shadow"}},
@@ -758,16 +761,17 @@ def _step_analysis(ws: dict, refresh) -> None:
 
         if a["warnings"]:
             with ui.card().classes(
-                "w-full bg-yellow-950 border border-yellow-700"
+                "w-full bg-yellow-50 border border-yellow-300 "
+                "dark:bg-yellow-950 dark:border-yellow-700"
             ):
                 ui.label("Warnings").classes(
-                    "text-sm font-semibold text-yellow-300 mb-1")
+                    "text-sm font-semibold text-yellow-700 dark:text-yellow-300 mb-1")
                 for w in a["warnings"]:
-                    ui.label(w).classes("text-sm text-yellow-200")
+                    ui.label(w).classes("text-sm text-yellow-800 dark:text-yellow-200")
 
         with ui.card().classes("w-full max-w-xl"):
             ui.label("Training Configuration").classes(
-                "text-sm font-semibold text-gray-400 mb-3")
+                "text-sm font-semibold text-gray-600 dark:text-gray-400 mb-3")
 
             with ui.row().classes("w-full items-center gap-4 py-1"):
                 ui.label("Run name").classes("w-44 text-sm")
@@ -832,17 +836,17 @@ def _step_training(ws: dict, refresh) -> None:
         with ui.card().classes("w-full"):
             status_lbl = ui.label("").classes(
                 "text-sm font-mono text-yellow-300 mb-1")
-            epoch_lbl  = ui.label("").classes("text-xs text-gray-400 mb-1")
-            ui.label("Epoch progress").classes("text-xs text-gray-500 mb-0")
+            epoch_lbl  = ui.label("").classes("text-xs text-gray-500 dark:text-gray-400 mb-1")
+            ui.label("Epoch progress").classes("text-xs text-gray-500 dark:text-gray-500 mb-0")
             prog_epoch = ui.linear_progress(value=0).props("color=green")
             ui.label("Batch progress (current epoch)").classes(
                 "text-xs text-gray-500 mt-2 mb-0")
             prog_batch = ui.linear_progress(value=0).props("color=blue")
-            batch_lbl  = ui.label("").classes("text-xs text-gray-500 mt-0")
+            batch_lbl  = ui.label("").classes("text-xs text-gray-500 dark:text-gray-500 mt-0")
 
         with ui.card().classes("w-full"):
             ui.label("Validation mAP (after each epoch)").classes(
-                "text-sm font-semibold text-gray-400 mb-1")
+                "text-sm font-semibold text-gray-600 dark:text-gray-400 mb-1")
             map_chart = ui.echart({
                 "tooltip": {"trigger": "axis"},
                 "legend":  {"data": ["mAP50", "mAP50-95"],
@@ -866,7 +870,7 @@ def _step_training(ws: dict, refresh) -> None:
 
         with ui.card().classes("w-full"):
             ui.label("Training Loss (per epoch)").classes(
-                "text-sm font-semibold text-gray-400 mb-1")
+                "text-sm font-semibold text-gray-600 dark:text-gray-400 mb-1")
             loss_chart = ui.echart({
                 "tooltip": {"trigger": "axis"},
                 "legend":  {"data": ["box", "cls", "dfl"],

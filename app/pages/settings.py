@@ -65,24 +65,42 @@ def page_settings() -> None:
         row("img_quality", "JPEG quality (1–100)")
         row("img_width",   "Capture width (px)")
 
-        ui.separator().classes("my-3")
-
+        section("Detection Parameters")
         with ui.card().classes(
-            "w-full "
+            "w-full mb-2 "
             "bg-blue-50 border border-blue-300 "
             "dark:bg-blue-950 dark:border-blue-700"
         ):
             ui.markdown(
-                "**YOLO detection parameters** (model path, image size, "
-                "confidence, IoU) are managed automatically by the "
-                "**Models** page.  \n"
-                "Activate a model there and all parameters update instantly."
+                "Model path and inference image size are set automatically "
+                "when you **activate a model** on the Models page.  \n"
+                "The parameters below take effect on the next monitoring start."
             ).classes("text-sm text-blue-900 dark:text-blue-200")
+        row("detect_conf", "Confidence threshold (0–1)")
+        row("detect_iou",  "IoU threshold for NMS (0–1)")
+        row("keep_top1",   "Keep top-1 detection per class only", kind="bool")
+
+        section("Alert Behaviour")
+        row(
+            "alert_threshold",
+            "Consecutive detections before alert",
+        )
+        with ui.row().classes("w-full"):
+            ui.label(
+                "Set to 1 to alert on every detection.  "
+                "Set to 2 or 3 to require repeated detections before "
+                "notifying (reduces false positives)."
+            ).classes("text-xs text-gray-500 dark:text-gray-500")
 
         ui.separator().classes("my-4")
 
         def _save_all() -> None:
-            save_settings({k: w.value for k, w in widgets.items()})
+            # Merge form values INTO the full current settings so that
+            # model-managed keys (model_path, detect_imgsz, …) are never
+            # silently dropped when the user saves the form.
+            current = get_settings()
+            current.update({k: w.value for k, w in widgets.items()})
+            save_settings(current)
             ui.notify("✅ Settings saved — restart monitoring to apply",
                       type="positive")
 

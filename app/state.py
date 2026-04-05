@@ -40,3 +40,8 @@ computer_win_usernames: dict[str, Optional[str]] = {}
 
 # Active training job — persists across page navigations
 training_worker: Optional["TrainingWorker"] = None
+
+# Consecutive-detection counters used by alert_service threshold logic.
+# Key: (computer_name, class_index: int) → consecutive hit count.
+# Reset to 0 when a frame has NO detection for that class.
+consecutive_detections: dict[tuple[str, int], int] = {}

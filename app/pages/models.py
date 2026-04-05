@@ -582,10 +582,33 @@ def _model_library() -> None:
 
         def on_delete(e) -> None:
             mid = e.args.get("id")
-            if mid:
-                delete_model(int(mid))
-                ui.notify("Model deleted.", type="warning")
-                _model_library.refresh()
+            if not mid:
+                return
+            mid = int(mid)
+            m = get_model_by_id(mid)
+            was_active = bool(m and m.get("is_active"))
+            delete_model(mid)
+            ui.notify("Model deleted.", type="warning")
+            if was_active:
+                # Promote the next ready model alphabetically
+                remaining = [
+                    r for r in list_models()
+                    if r["id"] != mid and r.get("status") == "ready"
+                ]
+                if remaining:
+                    next_m = remaining[0]
+                    set_active_model(next_m["id"])
+                    apply_active_model(next_m["id"])
+                    ui.notify(
+                        f"'{next_m['name']}' is now the active model.",
+                        type="info",
+                    )
+                else:
+                    ui.notify(
+                        "No other ready model available — activate one manually.",
+                        type="warning",
+                    )
+            _model_library.refresh()
 
         tbl.on("set_active",   on_set_active)
         tbl.on("edit_model",   on_edit_model)

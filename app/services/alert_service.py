@@ -2,13 +2,17 @@
 app/services/alert_service.py
 ──────────────────────────────
 Checks each batch of detections against the prohibited-class rules and
-inserts a notification row for every match.
+inserts a notification row for every match, subject to the consecutive-
+detection threshold set in Settings.
 
 Called from the detect worker thread — must be thread-safe (it is, since
-all DB writes use fresh sqlite3 connections).
+all DB writes use fresh sqlite3 connections and state dict updates are
+effectively atomic on CPython's GIL for simple key/value ops).
 """
 from __future__ import annotations
 
+import app.state as state
+from app.config import get_settings
 from app.db.database import get_prohibited_class_ids, insert_notification
 
 
@@ -20,7 +24,9 @@ def check_and_fire(
 ) -> int:
     """
     For each detection whose class_id (YOLO index) is in the prohibited set,
-    insert one notification row.
+    increment a consecutive-hit counter.  A notification is inserted only when
+    the counter reaches ``alert_threshold`` (default 1 = every detection).
+    Counters for classes absent from this frame are reset to zero.
 
     Parameters
     ----------
@@ -31,25 +37,49 @@ def check_and_fire(
 
     Returns
     -------
-    Number of notifications fired (0 if nothing matched or no rules defined).
+    Number of notifications fired this call.
     """
-    if not dets:
-        return 0
-
-    prohibited = get_prohibited_class_ids()   # {class_index: {"id": db_id, "color_hex": str}}
+    prohibited = get_prohibited_class_ids()   # {class_index: {"id": db_id, ...}}
     if not prohibited:
+        # Reset all counters for this computer when there are no rules
+        for key in list(state.consecutive_detections):
+            if key[0] == computer:
+                del state.consecutive_detections[key]
         return 0
 
-    fired = 0
-    seen: set[int] = set()   # deduplicate: one notification per class per event
+    threshold = int(get_settings().get("alert_threshold", 1))
+    threshold = max(1, threshold)
+
+    # Collect which prohibited classes fired this frame
+    detected_prohibited: dict[int, dict] = {}  # class_index → prohibited entry
+    seen_in_frame: set[int] = set()
 
     for d in dets:
         cid = d["class_id"]
-        if cid in prohibited and cid not in seen:
-            seen.add(cid)
+        if cid in prohibited and cid not in seen_in_frame:
+            seen_in_frame.add(cid)
+            detected_prohibited[cid] = prohibited[cid]
+
+    # Reset counters for prohibited classes NOT in this frame
+    for cid in list(prohibited):
+        key = (computer, cid)
+        if cid not in detected_prohibited:
+            state.consecutive_detections[key] = 0
+
+    # Increment counters and fire when threshold reached
+    fired = 0
+    for cid, entry in detected_prohibited.items():
+        key = (computer, cid)
+        count = state.consecutive_detections.get(key, 0) + 1
+        state.consecutive_detections[key] = count
+
+        if count >= threshold:
+            # Reset so the next streak starts fresh (avoids firing every frame
+            # once threshold is met — only fires once per threshold crossing)
+            state.consecutive_detections[key] = 0
             insert_notification(
                 event_id = event_id,
-                class_id = prohibited[cid]["id"],
+                class_id = entry["id"],
                 computer = computer,
                 student  = student,
             )

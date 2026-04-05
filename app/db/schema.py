@@ -54,6 +54,15 @@ def _migrate(c: sqlite3.Connection) -> None:
             c.execute("ALTER TABLE ml_model ADD COLUMN imgsz INTEGER DEFAULT 640")
             c.commit()
 
+    # 6. detection_event.model_id — link each event to the ML model that ran it
+    if _table_exists(c, "detection_event"):
+        if "model_id" not in _cols(c, "detection_event"):
+            c.execute(
+                "ALTER TABLE detection_event "
+                "ADD COLUMN model_id INTEGER REFERENCES ml_model(id) ON DELETE SET NULL"
+            )
+            c.commit()
+
     # 4. user: migrate role TEXT → role_id INTEGER FK
     #    Handles both the original schema and the old CHECK-constraint variant.
     if _table_exists(c, "user") and "role_id" not in _cols(c, "user"):
@@ -157,8 +166,9 @@ def init_db() -> None:
         -- detection events ────────────────────────────────────────────────────
         CREATE TABLE IF NOT EXISTS detection_event (
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
-            computer_id      INTEGER NOT NULL REFERENCES computer(id)  ON DELETE CASCADE,
-            user_id          INTEGER          REFERENCES user(id)       ON DELETE SET NULL,
+            computer_id      INTEGER NOT NULL REFERENCES computer(id)   ON DELETE CASCADE,
+            user_id          INTEGER          REFERENCES user(id)        ON DELETE SET NULL,
+            model_id         INTEGER          REFERENCES ml_model(id)   ON DELETE SET NULL,
             windows_username TEXT,
             detected_at      TEXT    NOT NULL,
             frame_blob       BLOB,
@@ -166,6 +176,7 @@ def init_db() -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_event_computer  ON detection_event(computer_id);
         CREATE INDEX IF NOT EXISTS idx_event_user      ON detection_event(user_id);
+        CREATE INDEX IF NOT EXISTS idx_event_model     ON detection_event(model_id);
         CREATE INDEX IF NOT EXISTS idx_event_winuser   ON detection_event(windows_username);
         CREATE INDEX IF NOT EXISTS idx_event_time      ON detection_event(detected_at);
         CREATE INDEX IF NOT EXISTS idx_event_comp_time ON detection_event(computer_id, detected_at);

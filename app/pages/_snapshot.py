@@ -93,16 +93,18 @@ def make_snapshot_dialogs():
 
     # ── Preview Dialog ────────────────────────────────────────────────────────
     with ui.dialog() as snap_dlg, \
-         ui.card().classes("rounded-lg m-0 p-0 shadow-none").style(
-             "max-width:900px; width:95vw; overflow:hidden; "
-             "background:#111; border: 1px solid #333;"
-         ):
+         ui.card().classes(
+             "rounded-lg m-0 p-0 shadow-none "
+             "bg-white dark:bg-gray-900 "
+             "border border-gray-200 dark:border-gray-700"
+         ).style("max-width:900px; width:95vw; overflow:hidden;"):
 
         with ui.row().classes(
-            "items-center justify-between px-3 w-full gap-2"
-        ).style("flex-shrink:0; height:36px; background:rgba(0,0,0,0.6);"):
+            "items-center justify-between px-3 w-full gap-2 "
+            "bg-gray-100 dark:bg-gray-800"
+        ).style("flex-shrink:0; height:36px;"):
             snap_meta = ui.label("").classes(
-                "text-xs text-gray-300 font-mono truncate flex-1")
+                "text-xs text-gray-600 dark:text-gray-300 font-mono truncate flex-1")
 
             with ui.row().classes("gap-1 items-center flex-shrink-0"):
 
@@ -113,8 +115,10 @@ def make_snapshot_dialogs():
                         snap_image.set_source(_src_ann[0])
                     else:
                         snap_image.set_source(_src_raw[0])
-                    ann_btn.props(
-                        "color=teal" if _show_ann[0] else "color=gray")
+                    # Use opacity to dim instead of color=gray so button
+                    # stays visible in both light and dark modes
+                    ann_btn.style(
+                        "opacity: 1;" if _show_ann[0] else "opacity: 0.4;")
 
                 ann_btn = ui.button(
                     "⊞  Annotations", on_click=_toggle_ann
@@ -157,10 +161,11 @@ def make_snapshot_dialogs():
                 ui.button("⛶  Full screen", on_click=_open_fs).props(
                     "flat dense size=xs color=teal")
                 ui.button(icon="close", on_click=snap_dlg.close).props(
-                    "flat round dense color=white size=xs")
+                    "flat round dense size=xs")
 
-        snap_image = ui.image("").props("fit=contain").style(
-            "width:100%; max-height:68vh; background:#000;")
+        snap_image = ui.image("").props("fit=contain no-spinner").classes(
+            "w-full bg-gray-900"
+        ).style("max-height:68vh;")
 
     # ── Public interface ──────────────────────────────────────────────────────
 
@@ -188,10 +193,9 @@ def make_snapshot_dialogs():
         # Default to annotated view when available
         snap_image.set_source(annotated_b64 if annotated_b64 else raw_b64)
 
-        # Show/hide the toggle depending on whether an annotated version exists
+        # Show/hide the toggle; reset opacity to full when re-opening
         ann_btn.set_visibility(bool(annotated_b64))
-        if annotated_b64:
-            ann_btn.props("color=teal")
+        ann_btn.style("opacity: 1;")
 
         snap_dlg.open()
 

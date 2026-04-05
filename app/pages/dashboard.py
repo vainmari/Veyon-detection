@@ -22,7 +22,7 @@ def page_dashboard() -> None:
         return
     nav(current)
 
-    with ui.row().classes("w-full gap-4 p-4 items-start flex-nowrap"):
+    with ui.row().classes("w-full gap-4 p-4 items-stretch flex-nowrap"):
 
         # ── Left column ───────────────────────────────────────────────────────
         with ui.column().classes("flex-1 gap-3 min-w-0"):
@@ -61,9 +61,9 @@ def page_dashboard() -> None:
                     ann_switch.tooltip(
                         "Toggle bounding-box overlay on the live preview")
 
-                live_img = ui.image("").classes("w-full rounded").style(
-                    "background:#111; display:block;"
-                )
+                live_img = ui.image("").props("no-spinner").classes(
+                    "w-full rounded"
+                ).style("display:block;")
 
             with ui.card().classes("w-full"):
                 with ui.row().classes("items-center gap-4"):
@@ -82,8 +82,8 @@ def page_dashboard() -> None:
                             "text-blue-600 dark:text-blue-300")
 
         # ── Right column: console ─────────────────────────────────────────────
-        with ui.card().classes("w-80 flex-shrink-0"):
-            with ui.row().classes("items-center justify-between mb-1"):
+        with ui.card().classes("w-80 flex-shrink-0 flex flex-col"):
+            with ui.row().classes("items-center justify-between mb-1 flex-shrink-0"):
                 ui.label("Console").classes(
                     "text-xs text-gray-500 dark:text-gray-400")
                 ui.button(
@@ -97,9 +97,10 @@ def page_dashboard() -> None:
                 "w-full font-mono text-xs rounded "
                 "bg-gray-100 text-green-700 "
                 "dark:bg-gray-950 dark:text-green-300"
-            ).style("height: 560px;")
+            ).style("flex: 1; min-height: 200px;")
 
     log_offset = [0]
+    _last_src:  list[str] = [""]   # deduplicate set_source calls → no flicker
 
     # ── Button handlers ───────────────────────────────────────────────────────
 
@@ -123,6 +124,7 @@ def page_dashboard() -> None:
         if state.monitor:
             state.monitor.stop()
             state.monitor = None
+        state.consecutive_detections.clear()
         btn_start.props(remove="disable")
         btn_stop.props("disable")
         status_lbl.set_text("● Stopped")
@@ -151,8 +153,11 @@ def page_dashboard() -> None:
         if sel and sel in state.latest_frames:
             ann_b64, raw_b64, dets = state.latest_frames[sel]
 
-            # Respect the annotation toggle — no DB hit needed here
-            live_img.set_source(ann_b64 if ann_switch.value else raw_b64)
+            # Only push to the DOM when the frame actually changed — eliminates flicker
+            src = ann_b64 if ann_switch.value else raw_b64
+            if src != _last_src[0]:
+                _last_src[0] = src
+                live_img.set_source(src)
 
             uid = state.computer_users.get(sel)
             if uid:

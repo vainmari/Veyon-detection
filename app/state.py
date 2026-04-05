@@ -26,9 +26,11 @@ if TYPE_CHECKING:
 monitor: Optional["MonitorController"] = None
 
 log_q: queue.Queue[str]                          = queue.Queue()
-img_q: queue.Queue[tuple[str, np.ndarray, list]] = queue.Queue(maxsize=64)
+img_q: queue.Queue[tuple[str, np.ndarray, np.ndarray, list]] = queue.Queue(maxsize=64)
+#                                         ↑ raw bgr    ↑ annotated bgr
 
-latest_frames:          dict[str, tuple[str, list]] = {}
+latest_frames:          dict[str, tuple[str, str, list]] = {}
+#                                        ↑ ann_b64  ↑ raw_b64
 log_buffer:             list[str]                   = []
 LOG_CAP = 500
 

@@ -65,11 +65,6 @@ def page_settings() -> None:
         row("img_quality", "JPEG quality (1–100)")
         row("img_width",   "Capture width (px)")
 
-        section("Output")
-        row("output_dir",     "Screenshots directory")
-        row("save_raw",       "Save raw frames",      kind="bool")
-        row("save_annotated", "Save annotated frames", kind="bool")
-
         ui.separator().classes("my-3")
 
         with ui.card().classes(

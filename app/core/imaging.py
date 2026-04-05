@@ -1,12 +1,10 @@
 """
 app/core/imaging.py
 ───────────────────
-Post-processing: draw bounding boxes, encode to base64, optionally save to disk.
+Post-processing: draw bounding boxes and encode to base64.
 """
 from __future__ import annotations
 import base64
-import os
-from datetime import datetime
 
 import cv2
 import numpy as np
@@ -76,16 +74,3 @@ def img_to_b64(img_bgr: np.ndarray, quality: int = 82) -> str:
     return "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode()
 
 
-def save_image(
-    output_dir: str,
-    name:       str,
-    img:        np.ndarray,
-    suffix:     str,
-    fmt:        str,
-) -> None:
-    folder = os.path.join(output_dir, name.replace(" ", "_"))
-    os.makedirs(folder, exist_ok=True)
-    ext  = "jpg" if fmt == "jpeg" else "png"
-    ts   = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    path = os.path.join(folder, f"{ts}_{suffix}.{ext}")
-    cv2.imwrite(path, img)

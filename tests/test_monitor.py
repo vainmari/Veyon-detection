@@ -50,8 +50,7 @@ def cfg():
         "img_fmt": "jpeg", "img_quality": 85, "img_width": 480,
         "model_path": "weights/model.onnx",
         "detect_conf": 0.4, "detect_iou": 0.2, "detect_imgsz": 480,
-        "keep_top1": True, "output_dir": "/tmp/out",
-        "save_raw": False, "save_annotated": False,
+        "keep_top1": True,
     }
 
 

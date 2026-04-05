@@ -189,7 +189,7 @@ def _user_menu(current_user: dict, dark) -> None:
 def _notification_bell() -> None:
     from app.db.database import (
         count_unread_notifications,
-        get_event_frame_b64,
+        get_event_frame_annotated_b64,
         list_notifications,
         mark_all_read,
         mark_read,
@@ -251,17 +251,17 @@ def _notification_bell() -> None:
                         f"  •  {n['student']}  •  {n['created_at']}"
                     )
 
-                    def _view(
-                        nid=n["id"], eid=n["event_id"], meta=meta_str,
-                    ) -> None:
+                    def _view(nid=n["id"], eid=n["event_id"], meta=meta_str) -> None:
                         mark_read(nid)
                         _refresh_badge()
                         _reload()
-                        b64 = get_event_frame_b64(eid)
-                        if b64:
-                            show_snapshot(b64, meta)
+                        raw_b64 = get_event_frame_b64(eid)
+                        if raw_b64:
+                            ann_b64 = get_event_frame_annotated_b64(eid)
+                            show_snapshot(raw_b64, meta, ann_b64)
                         else:
                             ui.notify("Snapshot not available", type="warning")
+
 
                     ui.button(icon="image", on_click=_view).props(
                         "flat round dense color=blue"

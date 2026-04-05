@@ -36,7 +36,7 @@ def check_and_fire(
     if not dets:
         return 0
 
-    prohibited = get_prohibited_class_ids()   # {class_index: color_hex}
+    prohibited = get_prohibited_class_ids()   # {class_index: {"id": db_id, "color_hex": str}}
     if not prohibited:
         return 0
 
@@ -48,11 +48,10 @@ def check_and_fire(
         if cid in prohibited and cid not in seen:
             seen.add(cid)
             insert_notification(
-                event_id    = event_id,
-                class_name  = d["class_name"],
-                class_color = prohibited[cid],
-                computer    = computer,
-                student     = student,
+                event_id = event_id,
+                class_id = prohibited[cid]["id"],
+                computer = computer,
+                student  = student,
             )
             fired += 1
 

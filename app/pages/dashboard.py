@@ -3,6 +3,7 @@ app/pages/dashboard.py
 ──────────────────────
 Dashboard page  /   (teacher only)
 Live annotated preview + console log + Start/Stop.
+Annotation overlay can be toggled on/off via the switch in the preview card.
 """
 from nicegui import ui
 
@@ -53,8 +54,13 @@ def page_dashboard() -> None:
                         ).props("dense outlined").classes("w-48")
 
             with ui.card().classes("w-full"):
-                ui.label("Live Preview").classes(
-                    "text-xs text-gray-500 dark:text-gray-400 mb-1")
+                with ui.row().classes("items-center justify-between mb-1"):
+                    ui.label("Live Preview").classes(
+                        "text-xs text-gray-500 dark:text-gray-400")
+                    ann_switch = ui.switch("Annotations", value=True).props("dense")
+                    ann_switch.tooltip(
+                        "Toggle bounding-box overlay on the live preview")
+
                 live_img = ui.image("").classes("w-full rounded").style(
                     "background:#111; display:block;"
                 )
@@ -143,8 +149,10 @@ def page_dashboard() -> None:
 
         sel = pc_sel.value
         if sel and sel in state.latest_frames:
-            b64, dets = state.latest_frames[sel]
-            live_img.set_source(b64)
+            ann_b64, raw_b64, dets = state.latest_frames[sel]
+
+            # Respect the annotation toggle — no DB hit needed here
+            live_img.set_source(ann_b64 if ann_switch.value else raw_b64)
 
             uid = state.computer_users.get(sel)
             if uid:

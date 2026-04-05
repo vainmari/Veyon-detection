@@ -16,19 +16,19 @@ import pytest
 @pytest.fixture(autouse=True)
 def db(tmp_path, monkeypatch):
     import app.db.database as m
-    # Swap the path AND close/invalidate the thread-local connection so the
-    # next _conn() call opens a fresh connection to the temp DB.
-    monkeypatch.setattr(m, "DB_PATH", tmp_path / "test.db")
-    import app.db.database as _db_mod
-    import threading
-    # Force a fresh connection for this test's thread
-    if hasattr(_db_mod._tls, "conn"):
+    import app.db._core as _core
+    # Patch DB_PATH in _core (where _conn() reads it) and on the facade for
+    # attribute access compatibility.
+    monkeypatch.setattr(_core, "DB_PATH", tmp_path / "test.db")
+    monkeypatch.setattr(m,     "DB_PATH", tmp_path / "test.db")
+    # Force a fresh connection for this test's thread.
+    if hasattr(_core._tls, "conn"):
         try:
-            _db_mod._tls.conn.close()
+            _core._tls.conn.close()
         except Exception:
             pass
-        del _db_mod._tls.conn
-        del _db_mod._tls.db_path
+        del _core._tls.conn
+        del _core._tls.db_path
     m.init_db()
     m.seed_classes()
     return m

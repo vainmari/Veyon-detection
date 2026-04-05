@@ -26,9 +26,6 @@ DEFAULTS: dict = {
     "detect_iou":     "0.20",
     "detect_imgsz":   "480",
     "keep_top1":      True,
-    "output_dir":     "./data/screenshots",
-    "save_raw":       False,
-    "save_annotated": True,
 }
 
 

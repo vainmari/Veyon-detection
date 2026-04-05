@@ -259,9 +259,9 @@ class MonitorController:
                         res, img_bgr, bool(cfg["keep_top1"])
                     )
 
-                    # Encode annotated frame as JPEG for DB storage
+                    # Store the RAW frame so the DB always holds clean pixels.
                     ok, buf = cv2.imencode(
-                        ".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 75]
+                        ".jpg", img_bgr, [cv2.IMWRITE_JPEG_QUALITY, 75]     # ← raw stored
                     )
                     frame_bytes = buf.tobytes() if ok else None
 
@@ -292,7 +292,7 @@ class MonitorController:
 
                     # Push to live preview queue — drop silently if full
                     try:
-                        state.img_q.put_nowait((comp_name, annotated, dets))
+                        state.img_q.put_nowait((comp_name, img_bgr, annotated, dets))
                     except queue.Full:
                         pass
 
@@ -330,8 +330,8 @@ def drain_worker() -> None:
 
         try:
             while True:
-                name, img_bgr, dets = state.img_q.get_nowait()
-                state.latest_frames[name] = (img_to_b64(img_bgr), dets)
+                name, raw_bgr, ann_bgr, dets = state.img_q.get_nowait()
+                state.latest_frames[name] = (img_to_b64(ann_bgr), img_to_b64(raw_bgr), dets)
         except queue.Empty:
             pass
 

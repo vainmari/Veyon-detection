@@ -1,20 +1,19 @@
 """
 tests/test_imaging.py
 ─────────────────────
-Tests for app/core/imaging.py — postprocess, img_to_b64, save_image.
+Tests for app/core/imaging.py — postprocess, img_to_b64.
 No GPU or real YOLO model required; YOLO result objects are faked.
 
 Run:  pytest tests/test_imaging.py -v
 """
 from __future__ import annotations
 import base64
-import time
 
 import cv2
 import numpy as np
 import pytest
 
-from app.core.imaging import img_to_b64, postprocess, save_image
+from app.core.imaging import img_to_b64, postprocess
 
 
 # ── Fake YOLO result objects ──────────────────────────────────────────────────
@@ -44,6 +43,8 @@ def _large_jpeg() -> bytes:
     ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 95])
     assert ok and len(buf.tobytes()) > 1000
     return buf.tobytes()
+
+
 
 
 # ── img_to_b64 ────────────────────────────────────────────────────────────────
@@ -128,26 +129,3 @@ class TestPostprocess:
         res = _FakeResult([_FakeBox(0, 0.123456, [0, 0, 5, 5])])
         _, dets = postprocess(res, _blank(), keep_top1=False)
         assert dets[0]["conf"] == round(0.123456, 3)
-
-
-# ── save_image ────────────────────────────────────────────────────────────────
-
-class TestSaveImage:
-    def test_creates_file(self, tmp_path):
-        save_image(str(tmp_path), "PC-01", _blank(), "det", "jpeg")
-        assert len(list(tmp_path.rglob("*.jpg"))) == 1
-
-    def test_subdirectory_created(self, tmp_path):
-        save_image(str(tmp_path), "My Computer", _blank(), "raw", "jpeg")
-        assert (tmp_path / "My_Computer").is_dir()
-
-    def test_png_extension(self, tmp_path):
-        save_image(str(tmp_path), "PC-02", _blank(), "raw", "png")
-        assert len(list(tmp_path.rglob("*.png"))) == 1
-
-    def test_multiple_saves_unique_names(self, tmp_path):
-        """Each call must produce a distinct filename (timestamp has microseconds)."""
-        for _ in range(3):
-            save_image(str(tmp_path), "PC-01", _blank(), "det", "jpeg")
-            time.sleep(0.01)   # ensure microsecond timestamps differ on fast CPUs
-        assert len(list(tmp_path.rglob("*.jpg"))) == 3

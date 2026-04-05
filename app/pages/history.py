@@ -12,6 +12,7 @@ from nicegui import ui
 from app.core.auth import require_auth
 from app.db.database import (
     get_event_frame_b64,
+    get_event_frame_annotated_b64,
     list_classes,
     list_computers,
     list_users,
@@ -120,14 +121,15 @@ def page_history() -> None:
         eid = row.get("event_id")
         if not eid:
             return
-        b64 = get_event_frame_b64(int(eid))
-        if b64:
+        raw_b64 = get_event_frame_b64(int(eid))
+        if raw_b64:
+            ann_b64 = get_event_frame_annotated_b64(int(eid))  # re-draws from DB
             meta = (
                 f"{row.get('detected_at', '')}  •  "
                 f"{row.get('computer', '—')}  •  "
                 f"{row.get('student', '—')}"
             )
-            show_snapshot(b64, meta)
+            show_snapshot(raw_b64, meta, ann_b64)
         else:
             ui.notify("No snapshot stored for this event", type="info")
 

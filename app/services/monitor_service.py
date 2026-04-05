@@ -34,6 +34,7 @@ from app.core.imaging import postprocess, img_to_b64
 from app.core.veyon import WEBAPI_BASE_TPL
 from app.services import alert_service
 from app.db.database import (
+    get_active_model,
     get_user_by_id,
     get_user_by_username,
     insert_event,
@@ -217,6 +218,8 @@ class MonitorController:
         max_b  = 32 if device == "cuda" else 16
         self._log(f"Detection engine: {device}  |  max_batch={max_b}")
         model = yolo.get_model(cfg["model_path"])
+        active = get_active_model()
+        active_model_id: Optional[int] = active["id"] if active else None
 
         while not self._stop.is_set():
             raw_batch:  list[bytes] = []
@@ -275,6 +278,7 @@ class MonitorController:
                             user_id=user_id,
                             windows_username=win_uname,
                             frame_bytes=frame_bytes,
+                            model_id=active_model_id,
                         )
                         student_disp = win_uname or "—"
                         if user_id:

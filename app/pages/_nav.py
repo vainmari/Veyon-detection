@@ -189,6 +189,7 @@ def _user_menu(current_user: dict, dark) -> None:
 def _notification_bell() -> None:
     from app.db.database import (
         count_unread_notifications,
+        get_event_frame_b64,
         get_event_frame_annotated_b64,
         list_notifications,
         mark_all_read,

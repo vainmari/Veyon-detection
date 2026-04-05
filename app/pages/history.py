@@ -90,10 +90,12 @@ def page_history() -> None:
         ]
         if is_teacher:
             teacher_cols = [
-                {"name": "computer", "label": "Computer",
-                 "field": "computer", "sortable": True, "align": "left"},
-                {"name": "student",  "label": "Student",
-                 "field": "student",  "sortable": True, "align": "left"},
+                {"name": "computer",   "label": "Computer",
+                 "field": "computer",   "sortable": True, "align": "left"},
+                {"name": "student",    "label": "Student",
+                 "field": "student",    "sortable": True, "align": "left"},
+                {"name": "model_name", "label": "Model",
+                 "field": "model_name", "sortable": True, "align": "left"},
             ]
             cols = [base_cols[0]] + teacher_cols + base_cols[1:]
         else:
@@ -156,8 +158,9 @@ def page_history() -> None:
         )
         for r in rows:
             r["had_detection"] = "✅" if r["had_detection"] else "—"
-            r["student"]       = r["student"] or "—"
+            r["student"]       = r["student"]    or "—"
             r["detections"]    = r["detections"] or "—"
+            r["model_name"]    = r.get("model_name") or "—"
         tbl.rows = rows
         tbl.update()
         count.set_text(f"{len(rows)} event(s)")

@@ -6,7 +6,7 @@ Alert Rules page  /alerts  (teacher only)
 from nicegui import ui
 
 from app.core.auth import require_auth
-from app.db.database import list_alert_rules, set_alert_rule
+from app.db.database import get_active_model, list_alert_rules, set_alert_rule
 from app.pages._nav import nav
 
 
@@ -33,13 +33,30 @@ def page_alerts() -> None:
             ).classes("text-sm text-yellow-900 dark:text-yellow-200")
 
         with ui.card().classes("w-full"):
-            ui.label("Detection Classes").classes(
-                "text-sm font-semibold text-gray-600 dark:text-gray-400 mb-3")
+            active = get_active_model()
+            if active:
+                active_names = {n.strip() for n in active.get("class_names", [])}
+                ui.label(
+                    f"Detection Classes  —  filtered to active model: {active['name']}"
+                ).classes("text-sm font-semibold text-gray-600 dark:text-gray-400 mb-3")
+            else:
+                active_names = None
+                ui.label("Detection Classes").classes(
+                    "text-sm font-semibold text-gray-600 dark:text-gray-400 mb-3")
 
             rules = list_alert_rules()
+            # Show only classes supported by the currently active model (if any)
+            if active_names is not None:
+                rules = [r for r in rules if r["name"] in active_names]
+
             if not rules:
-                ui.label("No detection classes found — start monitoring first.").classes(
-                    "text-gray-600 dark:text-gray-500 text-sm")
+                msg = (
+                    "No detection classes match the active model — "
+                    "run monitoring once to sync classes."
+                    if active_names is not None
+                    else "No detection classes found — activate a model and start monitoring."
+                )
+                ui.label(msg).classes("text-gray-600 dark:text-gray-500 text-sm")
             else:
                 for r in rules:
                     _class_row(r)

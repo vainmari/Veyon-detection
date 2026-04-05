@@ -143,6 +143,7 @@ def query_events(
 
     joins.append("JOIN computer c ON c.id = e.computer_id")
     joins.append("LEFT JOIN user u ON u.id = e.user_id")
+    joins.append("LEFT JOIN ml_model mm ON mm.id = e.model_id")
 
     if class_name:
         joins.append(
@@ -173,7 +174,8 @@ def query_events(
             e.had_detection,
             CASE WHEN e.frame_blob IS NOT NULL THEN 1 ELSE 0 END AS has_frame,
             GROUP_CONCAT(dc.name || ' (' || ROUND(d.confidence*100) || '%)', ', ')
-                                AS detections
+                                AS detections,
+            mm.name             AS model_name
         FROM {' '.join(joins)}
         {where}
         GROUP BY e.id

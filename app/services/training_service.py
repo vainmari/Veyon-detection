@@ -779,36 +779,24 @@ class TrainingWorker:
             rec   = float(rd.get("metrics/recall(B)",     0))
             pt_p  = str(MODELS_DIR / run_name / "weights" / "best.pt")
 
-            from app.db.database import (
-                create_ml_model,
-                create_training_session,
-                update_training_session,
-            )
+            from app.db.database import create_ml_model
             model_id = create_ml_model(
-                name        = run_name,
-                nc          = cfg["nc"],
-                class_names = cfg["names"],
-                pt_path     = pt_p,
-                onnx_path   = str(onnx_path),
-                map50       = m50,
-                map50_95    = m5095,
-                precision   = prec,
-                recall      = rec,
-                status      = "ready",
-                imgsz       = cfg["imgsz"],
-            )
-            sess_id = create_training_session(
-                model_id     = model_id,
+                name         = run_name,
+                nc           = cfg["nc"],
+                class_names  = cfg["names"],
+                pt_path      = pt_p,
+                onnx_path    = str(onnx_path),
+                map50        = m50,
+                map50_95     = m5095,
+                precision    = prec,
+                recall       = rec,
+                status       = "ready",
+                imgsz        = cfg["imgsz"],
                 dataset_path = cfg["yaml_path"],
                 base_model   = cfg["base_model"],
                 epochs       = cfg["epochs"],
-                imgsz        = cfg["imgsz"],
                 batch        = cfg["batch"],
                 device       = device,
-            )
-            update_training_session(
-                sess_id, status="done",
-                finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             )
 
             self.progress_q.put({

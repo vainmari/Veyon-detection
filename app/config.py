@@ -5,29 +5,41 @@ Default settings and helpers for reading / writing settings
 via NiceGUI's persistent app.storage.general.
 """
 from __future__ import annotations
+from pathlib import Path
+
 from nicegui import app
 
 STORAGE_SECRET = "change-me-to-any-random-string"   # override via .env / env var
 
 DEFAULTS: dict = {
+    # ── Authentication ─────────────────────────────────────────────────────────
+    "auth_method":      "key",       # "key" | "logon"
+    # Key-based auth
     "key_name":         "class",
     "key_path":         "class.pem",
+    # Logon auth
+    "logon_username":   "",
+    "logon_password":   "",
+    # ── Veyon CLI ──────────────────────────────────────────────────────────────
     "veyon_cli":        r"C:\Program Files\Veyon\veyon-cli.exe",
+    # ── WebAPI Server ──────────────────────────────────────────────────────────
     "host":             "localhost",
     "port":             "11080",
     "auto_start":       True,
     "start_wait":       "10",
+    # ── Capture ────────────────────────────────────────────────────────────────
     "interval":         "1",
     "img_fmt":          "jpeg",
     "img_quality":      "85",
     "img_width":        "480",
+    # ── Detection ──────────────────────────────────────────────────────────────
     "model_path":       "weights/ONNX_FP32.onnx",
     "detect_conf":      "0.40",
     "detect_iou":       "0.20",
     "detect_imgsz":     "480",
     "keep_top1":        True,
-    # Alert behaviour
-    "alert_threshold":  "1",   # min consecutive detections before notification fires
+    # ── Alert behaviour ────────────────────────────────────────────────────────
+    "alert_threshold":  "1",
 }
 
 
@@ -44,7 +56,6 @@ def apply_active_model(model_id: int) -> None:
         return
     sync_classes_from_model(model_id)
     s = get_settings()
-    # Prefer ONNX path; fall back to PT path so .pt-only models work too
     path = m.get("onnx_path") or m.get("pt_path")
     if path:
         s["model_path"] = path
@@ -63,9 +74,13 @@ def save_settings(vals: dict) -> None:
 
 
 def collect_cfg() -> dict:
-    """Cast settings strings to the types MonitorController expects."""
+    """
+    Cast settings strings to the types MonitorController expects.
+    For key-based auth, reads the key file and injects key_data into the cfg
+    so the I/O worker never touches the filesystem during monitoring.
+    """
     s = get_settings()
-    return {
+    cfg = {
         **s,
         "port":             int(s["port"]),
         "start_wait":       int(s["start_wait"]),
@@ -76,4 +91,11 @@ def collect_cfg() -> dict:
         "detect_iou":       float(s["detect_iou"]),
         "detect_imgsz":     int(s["detect_imgsz"]),
         "alert_threshold":  max(1, int(s.get("alert_threshold", 1))),
+        "key_data":         "",
     }
+    if s.get("auth_method", "key") == "key":
+        try:
+            cfg["key_data"] = Path(s["key_path"]).read_text(encoding="utf-8").strip()
+        except OSError:
+            cfg["key_data"] = ""
+    return cfg

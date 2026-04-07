@@ -35,7 +35,7 @@ def insert_event(
     computer_id:      int,
     dets:             list[dict],
     user_id:          Optional[int]   = None,
-    windows_username: Optional[str]   = None,
+    os_username: Optional[str]   = None,
     frame_bytes:      Optional[bytes] = None,
     model_id:         Optional[int]   = None,
 ) -> int:
@@ -46,9 +46,9 @@ def insert_event(
     c = _conn()
     cur = c.execute(
         "INSERT INTO detection_event "
-        "(computer_id, user_id, model_id, windows_username, detected_at, frame_blob, had_detection) "
+        "(computer_id, user_id, model_id, os_username, detected_at, frame_blob, had_detection) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (computer_id, user_id, model_id, windows_username, _now(),
+        (computer_id, user_id, model_id, os_username, _now(),
          frame_bytes, 1 if dets else 0),
     )
     event_id = cur.lastrowid

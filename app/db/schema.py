@@ -42,10 +42,13 @@ def _migrate(c: sqlite3.Connection) -> None:
     )
     c.commit()
 
-    # 2. detection_event.windows_username (added after initial release)
+    # 2. detection_event.os_username (originally windows_username, renamed to be OS-agnostic)
     if _table_exists(c, "detection_event"):
-        if "windows_username" not in _cols(c, "detection_event"):
-            c.execute("ALTER TABLE detection_event ADD COLUMN windows_username TEXT")
+        if "os_username" not in _cols(c, "detection_event"):
+            if "windows_username" in _cols(c, "detection_event"):
+                c.execute("ALTER TABLE detection_event RENAME COLUMN windows_username TO os_username")
+            else:
+                c.execute("ALTER TABLE detection_event ADD COLUMN os_username TEXT")
             c.commit()
 
     # 3. ml_model.imgsz (added after initial release)
@@ -123,6 +126,131 @@ def _migrate(c: sqlite3.Connection) -> None:
             PRAGMA foreign_keys = ON;
         """)
 
+    # 6b. Merge alert_rule into detection_class as notification_enabled column.
+    #     Migrate existing enabled flags, then drop the alert_rule table.
+    if _table_exists(c, "detection_class") and "notification_enabled" not in _cols(c, "detection_class"):
+        c.execute(
+            "ALTER TABLE detection_class "
+            "ADD COLUMN notification_enabled INTEGER NOT NULL DEFAULT 0"
+        )
+        if _table_exists(c, "alert_rule"):
+            c.execute("""
+                UPDATE detection_class
+                SET notification_enabled = (
+                    SELECT ar.enabled FROM alert_rule ar
+                    WHERE ar.class_id = detection_class.id
+                )
+                WHERE id IN (SELECT class_id FROM alert_rule)
+            """)
+            c.execute("DROP TABLE alert_rule")
+        c.commit()
+
+    # 8. Merge training_session into ml_model — add training config columns,
+    #    copy latest session data per model, then drop the training_session table.
+    if _table_exists(c, "ml_model") and "dataset_path" not in _cols(c, "ml_model"):
+        for col, typedef in [
+            ("dataset_path", "TEXT"),
+            ("base_model",   "TEXT"),
+            ("epochs",       "INTEGER"),
+            ("batch",        "INTEGER"),
+            ("device",       "TEXT"),
+        ]:
+            c.execute(f"ALTER TABLE ml_model ADD COLUMN {col} {typedef}")
+        if _table_exists(c, "training_session"):
+            c.execute("""
+                UPDATE ml_model
+                SET dataset_path = (SELECT ts.dataset_path FROM training_session ts
+                                    WHERE ts.model_id = ml_model.id
+                                    ORDER BY ts.started_at DESC LIMIT 1),
+                    base_model   = (SELECT ts.base_model   FROM training_session ts
+                                    WHERE ts.model_id = ml_model.id
+                                    ORDER BY ts.started_at DESC LIMIT 1),
+                    epochs       = (SELECT ts.epochs       FROM training_session ts
+                                    WHERE ts.model_id = ml_model.id
+                                    ORDER BY ts.started_at DESC LIMIT 1),
+                    batch        = (SELECT ts.batch        FROM training_session ts
+                                    WHERE ts.model_id = ml_model.id
+                                    ORDER BY ts.started_at DESC LIMIT 1),
+                    device       = (SELECT ts.device       FROM training_session ts
+                                    WHERE ts.model_id = ml_model.id
+                                    ORDER BY ts.started_at DESC LIMIT 1)
+            """)
+            c.execute("DROP TABLE training_session")
+        c.commit()
+
+    # 9. computer.group_id — added when computer_group was introduced.
+    if _table_exists(c, "computer") and "group_id" not in _cols(c, "computer"):
+        c.execute(
+            "ALTER TABLE computer ADD COLUMN group_id INTEGER "
+            "REFERENCES computer_group(id) ON DELETE SET NULL"
+        )
+        c.commit()
+
+    # 10. computer_group_member: many-to-many computer ↔ group.
+    #     Replaces the one-to-many computer.group_id FK.
+    if not _table_exists(c, "computer_group_member"):
+        c.execute("""
+            CREATE TABLE computer_group_member (
+                computer_id INTEGER NOT NULL REFERENCES computer(id) ON DELETE CASCADE,
+                group_id    INTEGER NOT NULL REFERENCES computer_group(id) ON DELETE CASCADE,
+                PRIMARY KEY (computer_id, group_id)
+            )
+        """)
+        # Migrate existing single-group assignments into the join table
+        if _table_exists(c, "computer") and "group_id" in _cols(c, "computer"):
+            c.execute("""
+                INSERT OR IGNORE INTO computer_group_member (computer_id, group_id)
+                SELECT id, group_id FROM computer WHERE group_id IS NOT NULL
+            """)
+        c.commit()
+
+    # 10b. Drop computer.group_id — superseded by computer_group_member.
+    if _table_exists(c, "computer") and "group_id" in _cols(c, "computer"):
+        c.executescript("""
+            PRAGMA foreign_keys = OFF;
+
+            CREATE TABLE computer_v2 (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                name         TEXT    NOT NULL UNIQUE,
+                host_address TEXT    NOT NULL,
+                created_at   TEXT    NOT NULL
+            );
+
+            INSERT INTO computer_v2 (id, name, host_address, created_at)
+            SELECT id, name, host_address, created_at FROM computer;
+
+            DROP TABLE computer;
+            ALTER TABLE computer_v2 RENAME TO computer;
+
+            PRAGMA foreign_keys = ON;
+        """)
+        c.commit()
+
+    # 7. notification: remove redundant computer/student TEXT columns.
+    #    These are now derived via JOINs through event_id.
+    if _table_exists(c, "notification") and "computer" in _cols(c, "notification"):
+        c.executescript("""
+            PRAGMA foreign_keys = OFF;
+
+            CREATE TABLE IF NOT EXISTS notification_v2 (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id   INTEGER REFERENCES detection_event(id) ON DELETE SET NULL,
+                class_id   INTEGER REFERENCES detection_class(id) ON DELETE SET NULL,
+                is_read    INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT    NOT NULL
+            );
+
+            INSERT INTO notification_v2
+                   (id, event_id, class_id, is_read, created_at)
+            SELECT  n.id, n.event_id, n.class_id, n.is_read, n.created_at
+            FROM notification n;
+
+            DROP TABLE notification;
+            ALTER TABLE notification_v2 RENAME TO notification;
+
+            PRAGMA foreign_keys = ON;
+        """)
+
 
 def init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -146,6 +274,15 @@ def init_db() -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_user_role ON user(role_id);
 
+        -- computer groups ─────────────────────────────────────────────────────
+        -- Logical groupings: Lab 1, Exam Room, etc.
+        CREATE TABLE IF NOT EXISTS computer_group (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT    NOT NULL UNIQUE,
+            description TEXT,
+            created_at  TEXT    NOT NULL
+        );
+
         -- computers ───────────────────────────────────────────────────────────
         CREATE TABLE IF NOT EXISTS computer (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -154,13 +291,53 @@ def init_db() -> None:
             created_at   TEXT    NOT NULL
         );
 
+        -- computer ↔ group membership (many-to-many) ──────────────────────────
+        CREATE TABLE IF NOT EXISTS computer_group_member (
+            computer_id INTEGER NOT NULL REFERENCES computer(id) ON DELETE CASCADE,
+            group_id    INTEGER NOT NULL REFERENCES computer_group(id) ON DELETE CASCADE,
+            PRIMARY KEY (computer_id, group_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_cgm_computer ON computer_group_member(computer_id);
+        CREATE INDEX IF NOT EXISTS idx_cgm_group    ON computer_group_member(group_id);
+
+        -- monitoring schedules ────────────────────────────────────────────────
+        -- When to automatically start/stop monitoring a group.
+        -- days_of_week: comma-separated 0-6 (0=Mon … 6=Sun)
+        CREATE TABLE IF NOT EXISTS schedule (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id     INTEGER REFERENCES computer_group(id) ON DELETE CASCADE,
+            name         TEXT    NOT NULL,
+            days_of_week TEXT    NOT NULL DEFAULT '0,1,2,3,4',
+            start_time   TEXT    NOT NULL,
+            end_time     TEXT    NOT NULL,
+            is_active    INTEGER NOT NULL DEFAULT 1,
+            created_by   INTEGER REFERENCES user(id) ON DELETE SET NULL,
+            created_at   TEXT    NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_schedule_group ON schedule(group_id);
+
+        -- audit log ───────────────────────────────────────────────────────────
+        -- Immutable trail of every significant action performed by a user.
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id    INTEGER REFERENCES user(id) ON DELETE SET NULL,
+            action     TEXT    NOT NULL,
+            entity     TEXT,
+            entity_id  INTEGER,
+            detail     TEXT,
+            created_at TEXT    NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_log(user_id);
+        CREATE INDEX IF NOT EXISTS idx_audit_time ON audit_log(created_at);
+
         -- detection classes ───────────────────────────────────────────────────
         CREATE TABLE IF NOT EXISTS detection_class (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            class_index  INTEGER NOT NULL UNIQUE,
-            name         TEXT    NOT NULL UNIQUE,
-            color_hex    TEXT    NOT NULL,
-            created_at   TEXT    NOT NULL
+            id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+            class_index           INTEGER NOT NULL UNIQUE,
+            name                  TEXT    NOT NULL UNIQUE,
+            color_hex             TEXT    NOT NULL,
+            notification_enabled  INTEGER NOT NULL DEFAULT 0,
+            created_at            TEXT    NOT NULL
         );
 
         -- detection events ────────────────────────────────────────────────────
@@ -169,7 +346,7 @@ def init_db() -> None:
             computer_id      INTEGER NOT NULL REFERENCES computer(id)   ON DELETE CASCADE,
             user_id          INTEGER          REFERENCES user(id)        ON DELETE SET NULL,
             model_id         INTEGER          REFERENCES ml_model(id)   ON DELETE SET NULL,
-            windows_username TEXT,
+            os_username      TEXT,
             detected_at      TEXT    NOT NULL,
             frame_blob       BLOB,
             had_detection    INTEGER NOT NULL DEFAULT 0
@@ -177,7 +354,7 @@ def init_db() -> None:
         CREATE INDEX IF NOT EXISTS idx_event_computer  ON detection_event(computer_id);
         CREATE INDEX IF NOT EXISTS idx_event_user      ON detection_event(user_id);
         CREATE INDEX IF NOT EXISTS idx_event_model     ON detection_event(model_id);
-        CREATE INDEX IF NOT EXISTS idx_event_winuser   ON detection_event(windows_username);
+        CREATE INDEX IF NOT EXISTS idx_event_winuser   ON detection_event(os_username);
         CREATE INDEX IF NOT EXISTS idx_event_time      ON detection_event(detected_at);
         CREATE INDEX IF NOT EXISTS idx_event_comp_time ON detection_event(computer_id, detected_at);
         CREATE INDEX IF NOT EXISTS idx_event_user_time ON detection_event(user_id, detected_at);
@@ -196,24 +373,12 @@ def init_db() -> None:
         CREATE INDEX IF NOT EXISTS idx_det_event ON detection(event_id);
         CREATE INDEX IF NOT EXISTS idx_det_class ON detection(class_id);
 
-        -- alert rules ─────────────────────────────────────────────────────────
-        CREATE TABLE IF NOT EXISTS alert_rule (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            class_id   INTEGER NOT NULL UNIQUE
-                           REFERENCES detection_class(id) ON DELETE CASCADE,
-            enabled    INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT    NOT NULL
-        );
-
         -- notifications ───────────────────────────────────────────────────────
-        -- class_id FK replaces the old denormalized class_name / class_color columns.
-        -- Join detection_class to get name and color at query time.
+        -- computer and student are derived via event_id JOINs at query time.
         CREATE TABLE IF NOT EXISTS notification (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
             event_id   INTEGER REFERENCES detection_event(id) ON DELETE SET NULL,
             class_id   INTEGER REFERENCES detection_class(id) ON DELETE SET NULL,
-            computer   TEXT    NOT NULL,
-            student    TEXT    NOT NULL,
             is_read    INTEGER NOT NULL DEFAULT 0,
             created_at TEXT    NOT NULL
         );
@@ -221,6 +386,8 @@ def init_db() -> None:
         CREATE INDEX IF NOT EXISTS idx_notif_time ON notification(created_at);
 
         -- ml models ───────────────────────────────────────────────────────────
+        -- Training config (dataset_path, base_model, epochs, batch, device)
+        -- is stored directly here — no separate training_session table.
         CREATE TABLE IF NOT EXISTS ml_model (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             name         TEXT    NOT NULL UNIQUE,
@@ -235,22 +402,12 @@ def init_db() -> None:
             recall       REAL,
             is_active    INTEGER NOT NULL DEFAULT 0,
             status       TEXT    NOT NULL DEFAULT 'ready',
-            created_at   TEXT    NOT NULL,
-            finished_at  TEXT
-        );
-
-        -- training sessions ───────────────────────────────────────────────────
-        CREATE TABLE IF NOT EXISTS training_session (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            model_id     INTEGER REFERENCES ml_model(id) ON DELETE CASCADE,
-            dataset_path TEXT    NOT NULL,
-            base_model   TEXT    NOT NULL,
-            epochs       INTEGER NOT NULL,
-            imgsz        INTEGER NOT NULL,
-            batch        INTEGER NOT NULL,
+            dataset_path TEXT,
+            base_model   TEXT,
+            epochs       INTEGER,
+            batch        INTEGER,
             device       TEXT,
-            status       TEXT    NOT NULL DEFAULT 'running',
-            started_at   TEXT    NOT NULL,
+            created_at   TEXT    NOT NULL,
             finished_at  TEXT
         );
     """)

@@ -37,8 +37,8 @@ from app.db.database import (
     create_ml_model,
     delete_model,
     get_model_by_id,
-    list_model_sessions,
     list_models,
+    log_action,
     set_active_model,
     update_ml_model,
 )
@@ -300,35 +300,31 @@ def _model_library() -> None:
 
                 is_pt = onnx_path.endswith(".pt")
                 try:
-                    model_id = create_ml_model(
-                        name        = imp_name.value.strip(),
-                        nc          = len(names),
-                        class_names = names,
-                        pt_path     = onnx_path if is_pt else None,
-                        onnx_path   = None if is_pt else onnx_path,
-                        map50       = float(imp_map50.value   or 0),
-                        map50_95    = float(imp_map5095.value or 0),
-                        precision   = float(imp_prec.value    or 0),
-                        recall      = float(imp_recall.value  or 0),
-                        status      = "ready",
-                        imgsz       = int(imp_imgsz.value),
+                    new_mid = create_ml_model(
+                        name         = imp_name.value.strip(),
+                        nc           = len(names),
+                        class_names  = names,
+                        pt_path      = onnx_path if is_pt else None,
+                        onnx_path    = None if is_pt else onnx_path,
+                        map50        = float(imp_map50.value   or 0),
+                        map50_95     = float(imp_map5095.value or 0),
+                        precision    = float(imp_prec.value    or 0),
+                        recall       = float(imp_recall.value  or 0),
+                        status       = "ready",
+                        imgsz        = int(imp_imgsz.value),
+                        base_model   = imp_base.value.strip() or "imported",
+                        dataset_path = "— imported —",
                     )
                 except Exception as ex:
                     imp_msg.set_text(f"❌  {ex}")
                     imp_msg.classes(replace="text-sm text-red-400")
                     return
-
-                from app.db.database import create_training_session, update_training_session
-                sess_id = create_training_session(
-                    model_id     = model_id,
-                    dataset_path = "— imported —",
-                    base_model   = imp_base.value.strip() or "imported",
-                    epochs=0, imgsz=int(imp_imgsz.value), batch=0, device="—",
-                )
-                update_training_session(
-                    sess_id, status="done",
-                    finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                )
+                from app.core.auth import get_session_user
+                _u = get_session_user()
+                log_action("model.import", user_id=_u["id"] if _u else None,
+                           entity="ml_model", entity_id=new_mid,
+                           detail=f"name={imp_name.value.strip()}, "
+                                  f"nc={len(names)}, imgsz={imp_imgsz.value}")
                 import_dlg.close()
                 ui.notify(
                     f"✅  '{imp_name.value.strip()}' imported "
@@ -401,6 +397,11 @@ def _model_library() -> None:
                     precision    = float(edit_prec.value    or 0),
                     recall       = float(edit_recall.value  or 0),
                 )
+                from app.core.auth import get_session_user
+                _u = get_session_user()
+                log_action("model.update", user_id=_u["id"] if _u else None,
+                           entity="ml_model", entity_id=mid,
+                           detail=f"name={edit_name.value.strip()}")
                 edit_dlg.close()
                 ui.notify("Model updated.", type="positive")
                 _model_library.refresh()
@@ -575,8 +576,18 @@ def _model_library() -> None:
         def on_show_history(e) -> None:
             row = e.args
             mid = row.get("id")
-            hist_dlg_title.set_text(f"History — {row.get('name', '')}")
-            hist_table.rows = list_model_sessions(int(mid)) if mid else []
+            hist_dlg_title.set_text(f"Training config — {row.get('name', '')}")
+            m = get_model_by_id(int(mid)) if mid else None
+            hist_table.rows = [{
+                "base_model":  m.get("base_model")  or "—",
+                "epochs":      m.get("epochs")      or "—",
+                "imgsz":       m.get("imgsz")       or "—",
+                "batch":       m.get("batch")       or "—",
+                "device":      m.get("device")      or "—",
+                "status":      m.get("status")      or "—",
+                "started_at":  m.get("created_at")  or "—",
+                "finished_at": m.get("finished_at") or "—",
+            }] if m else []
             hist_table.update()
             hist_dlg.open()
 
@@ -588,6 +599,11 @@ def _model_library() -> None:
             m = get_model_by_id(mid)
             was_active = bool(m and m.get("is_active"))
             delete_model(mid)
+            from app.core.auth import get_session_user
+            _u = get_session_user()
+            log_action("model.delete", user_id=_u["id"] if _u else None,
+                       entity="ml_model", entity_id=mid,
+                       detail=f"name={m['name'] if m else '?'}")
             ui.notify("Model deleted.", type="warning")
             if was_active:
                 # Promote the next ready model alphabetically

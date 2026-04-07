@@ -11,6 +11,7 @@ import app.state as state
 from app.config import collect_cfg
 from app.core.auth import require_auth
 from app.core.yolo import reset_model
+from app.db.database import list_groups, list_computers_in_group, log_action
 from app.pages._nav import nav
 from app.services.monitor_service import MonitorController
 
@@ -30,9 +31,13 @@ def page_dashboard() -> None:
             with ui.card().classes("w-full"):
                 with ui.row().classes("items-center gap-3 flex-wrap"):
                     running = state.monitor is not None
-                    status_lbl = ui.label(
-                        "● Running" if running else "● Stopped"
-                    ).classes(
+                    # Build status text — include group name when running
+                    def _status_text() -> str:
+                        if state.monitor is None:
+                            return "● Stopped"
+                        g = state.monitored_group_name
+                        return f"● Running ({g})" if g else "● Running (all)"
+                    status_lbl = ui.label(_status_text()).classes(
                         "font-mono text-sm " +
                         ("text-green-500 dark:text-green-400"
                          if running else
@@ -44,6 +49,23 @@ def page_dashboard() -> None:
                         btn_start.props("disable")
                     else:
                         btn_stop.props("disable")
+
+                    # Group selector — 0 = "All computers", >0 = specific group id
+                    # NiceGUI ui.select dict format: {stored_value: displayed_label}
+                    groups = list_groups()
+                    group_opts: dict[int, str] = {0: "All computers"}
+                    group_opts.update({g["id"]: g["name"] for g in groups})
+                    with ui.row().classes("items-center gap-1"):
+                        ui.label("Group:").classes(
+                            "text-sm text-gray-500 dark:text-gray-400")
+                        group_sel = ui.select(
+                            options=group_opts,
+                            value=0,
+                        ).props("dense outlined").classes("w-44")
+                        group_sel.tooltip(
+                            "Monitor only computers in the selected group, "
+                            "or all Veyon-discovered computers"
+                        )
 
                     with ui.row().classes("items-center gap-2 ml-auto"):
                         ui.label("Computer:").classes(
@@ -84,23 +106,26 @@ def page_dashboard() -> None:
         # ── Right column: console ─────────────────────────────────────────────
         with ui.card().classes("w-80 flex-shrink-0 flex flex-col"):
             with ui.row().classes("items-center justify-between mb-1 flex-shrink-0"):
-                ui.label("Console").classes(
+                ui.label("Console  ↑ newest first").classes(
                     "text-xs text-gray-500 dark:text-gray-400")
                 ui.button(
                     "Clear",
                     on_click=lambda: (
-                        log_view.clear(),
+                        log_view.set_value(""),
                         log_offset.__setitem__(0, len(state.log_buffer)),
                     ),
                 ).props("flat dense size=xs")
-            log_view = ui.log(max_lines=400).classes(
+            log_view = ui.textarea(value="").props(
+                "readonly outlined dense rows=53"
+            ).classes(
                 "w-full font-mono text-xs rounded "
                 "bg-gray-100 text-green-700 "
                 "dark:bg-gray-950 dark:text-green-300"
-            ).style("flex: 1; min-height: 200px;")
+            ).style("flex: 1; min-height: 200px; resize: none;")
 
     log_offset = [0]
-    _last_src:  list[str] = [""]   # deduplicate set_source calls → no flicker
+    _last_src:    list[str]       = [""]   # deduplicate set_source calls → no flicker
+    _mon_names:   list[set[str]]  = [set()]  # computer names for the active session
 
     # ── Button handlers ───────────────────────────────────────────────────────
 
@@ -111,12 +136,33 @@ def page_dashboard() -> None:
             cfg = collect_cfg()
         except (ValueError, KeyError) as e:
             ui.notify(f"Config error: {e}", type="negative"); return
+
+        # Resolve computers for the selected group (0 = all)
+        gid   = group_sel.value   # 0 = all computers, >0 = group id
+        gname = group_opts.get(gid, "") if gid else ""
+
+        computers: list[dict] | None = None
+        if gid:
+            rows = list_computers_in_group(gid)
+            if not rows:
+                ui.notify(
+                    f"Group '{gname}' has no computers assigned.", type="warning"
+                )
+                return
+            computers = [{"name": r["name"], "host": r["host_address"]} for r in rows]
+
         reset_model()
-        state.monitor = MonitorController(cfg)
+        state.monitor = MonitorController(cfg, computers=computers)
         state.monitor.start()
+        state.monitored_group_name = gname if gid else ""
+        _mon_names[0] = {c["name"] for c in computers} if computers else set()
+        log_action("monitor.start", user_id=current["id"],
+                   detail=f"group={gname or 'all'}")
         btn_start.props("disable")
         btn_stop.props(remove="disable")
-        status_lbl.set_text("● Running")
+        group_sel.props("disable")
+        label = f"● Running ({gname})" if gid else "● Running (all)"
+        status_lbl.set_text(label)
         status_lbl.classes(
             replace="font-mono text-sm text-green-500 dark:text-green-400")
 
@@ -125,8 +171,13 @@ def page_dashboard() -> None:
             state.monitor.stop()
             state.monitor = None
         state.consecutive_detections.clear()
+        state.schedule_triggered    = False   # manual stop overrides scheduler
+        state.monitored_group_name  = None
+        _mon_names[0] = set()
+        log_action("monitor.stop", user_id=current["id"], detail="manual")
         btn_start.props(remove="disable")
         btn_stop.props("disable")
+        group_sel.props(remove="disable")
         status_lbl.set_text("● Stopped")
         status_lbl.classes(
             replace="font-mono text-sm text-red-500 dark:text-red-400")
@@ -137,17 +188,49 @@ def page_dashboard() -> None:
     # ── 100 ms UI refresh ─────────────────────────────────────────────────────
 
     def tick() -> None:
+        # ── Console: prepend new lines so newest appears at the top ───────────
         new = state.log_buffer[log_offset[0]:]
-        for msg in new:
-            log_view.push(msg)
         log_offset[0] = len(state.log_buffer)
+        if new:
+            new_block = "\n".join(reversed(new))
+            old = log_view.value or ""
+            combined = new_block + ("\n" + old if old else "")
+            # Cap at 400 lines to prevent unbounded growth
+            lines = combined.split("\n")
+            if len(lines) > 400:
+                combined = "\n".join(lines[:400])
+            log_view.set_value(combined)
 
-        opts = list(state.latest_frames.keys())
+        # ── Keep status / buttons in sync with scheduler-driven start/stop ────
+        if state.monitor is not None:
+            g = state.monitored_group_name
+            lbl = f"● Running ({g})" if g else "● Running (all)"
+            if status_lbl.text != lbl:
+                status_lbl.set_text(lbl)
+                status_lbl.classes(
+                    replace="font-mono text-sm text-green-500 dark:text-green-400")
+                btn_start.props("disable")
+                btn_stop.props(remove="disable")
+                group_sel.props("disable")
+        else:
+            if status_lbl.text != "● Stopped":
+                status_lbl.set_text("● Stopped")
+                status_lbl.classes(
+                    replace="font-mono text-sm text-red-500 dark:text-red-400")
+                btn_start.props(remove="disable")
+                btn_stop.props("disable")
+                group_sel.props(remove="disable")
+                _mon_names[0] = set()
+
+        # ── Computer selector: only show computers in the monitored group ─────
+        all_opts = list(state.latest_frames.keys())
+        filter_names = _mon_names[0]
+        opts = [n for n in all_opts if n in filter_names] if filter_names else all_opts
         if sorted(opts) != sorted(list(pc_sel.options or [])):
             pc_sel.options = opts
             pc_sel.update()
-            if pc_sel.value is None and opts:
-                pc_sel.set_value(opts[0])
+            if pc_sel.value not in opts:
+                pc_sel.set_value(opts[0] if opts else None)
 
         sel = pc_sel.value
         if sel and sel in state.latest_frames:

@@ -45,7 +45,7 @@ def get_summary_stats(
         f"SELECT COUNT(*) {base} {and_or} e.had_detection=1", p
     ).fetchone()[0]
     students = c.execute(
-        f"SELECT COUNT(DISTINCT COALESCE(e.user_id, e.windows_username)) {base}", p
+        f"SELECT COUNT(DISTINCT COALESCE(e.user_id, e.os_username)) {base}", p
     ).fetchone()[0]
     row = c.execute(f"""
         SELECT dc.name, COUNT(*) AS cnt
@@ -118,7 +118,7 @@ def get_student_activity(
     c = _conn()
     rows = c.execute(f"""
         SELECT
-            COALESCE(u.username, e.windows_username, '(unknown)') AS student,
+            COALESCE(u.username, e.os_username, '(unknown)') AS student,
             COUNT(*) AS hits
         FROM detection_event e
         LEFT JOIN user u ON u.id = e.user_id
@@ -170,7 +170,7 @@ def query_events(
             e.id                AS event_id,
             e.detected_at,
             c.name              AS computer,
-            COALESCE(u.username, e.windows_username, '—') AS student,
+            COALESCE(u.username, e.os_username, '—') AS student,
             e.had_detection,
             CASE WHEN e.frame_blob IS NOT NULL THEN 1 ELSE 0 END AS has_frame,
             GROUP_CONCAT(dc.name || ' (' || ROUND(d.confidence*100) || '%)', ', ')

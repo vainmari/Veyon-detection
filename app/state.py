@@ -36,7 +36,7 @@ LOG_CAP = 500
 
 computer_ids:           dict[str, int]           = {}
 computer_users:         dict[str, Optional[int]] = {}
-computer_win_usernames: dict[str, Optional[str]] = {}
+computer_os_usernames:  dict[str, Optional[str]] = {}
 
 # Active training job — persists across page navigations
 training_worker: Optional["TrainingWorker"] = None
@@ -45,3 +45,14 @@ training_worker: Optional["TrainingWorker"] = None
 # Key: (computer_name, class_index: int) → consecutive hit count.
 # Reset to 0 when a frame has NO detection for that class.
 consecutive_detections: dict[tuple[str, int], int] = {}
+
+# Set to True when monitoring was started automatically by the schedule service.
+# The scheduler will only auto-STOP a session it started itself — it never stops
+# a session the teacher launched manually.
+schedule_triggered: bool = False
+
+# Human-readable label for what is currently being monitored.
+# None  → not running
+# ""    → all computers (no group filter)
+# "Lab 1" → a specific group name
+monitored_group_name: Optional[str] = None

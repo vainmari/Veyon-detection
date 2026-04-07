@@ -54,7 +54,7 @@ def create_user(
 ) -> int:
     """
     Create a user account and immediately auto-assign matching anonymous events
-    (windows_username case-insensitive match) so past data is never lost.
+    (os_username case-insensitive match) so past data is never lost.
     Returns the new user's integer id.
     """
     role_id = get_role_id(role)
@@ -69,18 +69,21 @@ def create_user(
     new_id = cur.lastrowid
     c.commit()
     _auto_assign_by_username(username, new_id)
+    from app.db.audit import log_action
+    log_action("user.create", entity="user", entity_id=new_id,
+                detail=f"role={role}, created_by={created_by_id}")
     return new_id
 
 
 def _auto_assign_by_username(username: str, user_id: int) -> int:
     """
-    Assign all anonymous events whose windows_username matches username
+    Assign all anonymous events whose os_username matches username
     (case-insensitive).  Returns number of rows updated.
     """
     c = _conn()
     cur = c.execute(
         "UPDATE detection_event SET user_id = ? "
-        "WHERE LOWER(windows_username) = LOWER(?) AND user_id IS NULL",
+        "WHERE LOWER(os_username) = LOWER(?) AND user_id IS NULL",
         (user_id, username),
     )
     c.commit()
@@ -94,9 +97,13 @@ def update_password(user_id: int, new_password: str) -> None:
         (_hash_pw(new_password), user_id),
     )
     c.commit()
+    from app.db.audit import log_action
+    log_action("user.password_change", entity="user", entity_id=user_id)
 
 
 def delete_user(user_id: int) -> None:
+    from app.db.audit import log_action
+    log_action("user.delete", entity="user", entity_id=user_id)
     c = _conn()
     c.execute("DELETE FROM user WHERE id = ?", (user_id,))
     c.commit()

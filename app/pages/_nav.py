@@ -42,8 +42,11 @@ def nav(current_user: dict) -> None:
                 ("History",     "/history"),
                 ("Analytics",   "/analytics"),
                 ("Alert Rules", "/alerts"),
+                ("Groups",      "/groups"),
+                ("Schedules",   "/schedules"),
                 ("Users",       "/users"),
                 ("Models",      "/models"),
+                ("Audit Log",   "/audit"),
                 ("Settings",    "/settings"),
             ]:
                 ui.link(label, path).classes(
@@ -84,6 +87,8 @@ def nav(current_user: dict) -> None:
                 if state.monitor:
                     state.monitor.stop()
                     state.monitor = None
+                state.schedule_triggered   = False   # manual stop overrides scheduler
+                state.monitored_group_name = None
 
             btn_start.on_click(do_start)
             btn_stop.on_click(do_stop)

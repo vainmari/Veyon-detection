@@ -20,7 +20,6 @@ def check_and_fire(
     event_id: int,
     dets:     list[dict],
     computer: str,
-    student:  str,
 ) -> int:
     """
     For each detection whose class_id (YOLO index) is in the prohibited set,
@@ -33,7 +32,6 @@ def check_and_fire(
     event_id : DB id of the detection_event that was just inserted.
     dets     : List of detection dicts from imaging.postprocess().
     computer : Display name of the monitored computer.
-    student  : Resolved student display name (Windows username or DB username).
 
     Returns
     -------
@@ -80,8 +78,6 @@ def check_and_fire(
             insert_notification(
                 event_id = event_id,
                 class_id = entry["id"],
-                computer = computer,
-                student  = student,
             )
             fired += 1
 

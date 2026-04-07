@@ -21,7 +21,6 @@ import queue
 import threading
 import time
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
 
 import cv2
@@ -42,15 +41,25 @@ from app.db.database import (
 )
 
 
-def _parse_win_username(raw: str) -> str:
-    """Strip 'COMPUTER\\' prefix: 'JP_laptop\\Jonas' → 'Jonas'."""
+def _parse_os_username(raw: str) -> str:
+    """Strip domain/host prefix: 'DOMAIN\\Jonas' → 'Jonas'."""
     return raw.split("\\")[-1].strip()
 
 
 class MonitorController:
 
-    def __init__(self, cfg: dict) -> None:
-        self.cfg   = cfg
+    def __init__(
+        self,
+        cfg:       dict,
+        computers: Optional[list[dict]] = None,
+    ) -> None:
+        """
+        cfg       — settings dict from collect_cfg()
+        computers — optional pre-filtered list of {"name": str, "host": str}.
+                    When None the controller discovers all computers from Veyon.
+        """
+        self.cfg       = cfg
+        self._computers = computers   # None = discover; list = use as-is
         self._stop = threading.Event()
         self._proc: Optional[object] = None
         # raw_q carries (computer_name, raw_jpeg_bytes) decoded in detect worker
@@ -84,10 +93,13 @@ class MonitorController:
 
     def _run(self) -> None:
         cfg = self.cfg
-        try:
-            key_data = Path(cfg["key_path"]).read_text(encoding="utf-8").strip()
-        except OSError as e:
-            self._log(f"❌ Cannot read key file: {e}")
+
+        # Validate auth config up-front
+        if cfg.get("auth_method", "key") == "key" and not cfg.get("key_data"):
+            self._log("❌ Key file missing or empty — check Settings")
+            return
+        if cfg.get("auth_method") == "logon" and not cfg.get("logon_username"):
+            self._log("❌ Logon username is empty — check Settings")
             return
 
         base_url = WEBAPI_BASE_TPL.format(host=cfg["host"], port=cfg["port"])
@@ -121,16 +133,19 @@ class MonitorController:
             self._log(f"❌ Model load failed: {e}")
             return
 
-        self._log("Discovering computers…")
-        try:
-            computers = veyon.discover_computers(cfg["veyon_cli"])
-        except Exception as e:
-            self._log(f"❌ Discovery failed: {e}")
-            return
+        if self._computers is not None:
+            computers = self._computers
+            self._log(f"Using {len(computers)} pre-selected computer(s)")
+        else:
+            self._log("Discovering computers…")
+            try:
+                computers = veyon.discover_computers(cfg["veyon_cli"])
+            except Exception as e:
+                self._log(f"❌ Discovery failed: {e}")
+                return
 
         if not computers:
-            self._log(
-                "No computers found — add them in Veyon Configurator")
+            self._log("No computers found — add them in Veyon Configurator")
             return
 
         self._log(f"Found {len(computers)} computer(s):")
@@ -142,7 +157,7 @@ class MonitorController:
         for c in computers:
             threading.Thread(
                 target=self._io_worker,
-                args=(c["name"], c["host"], key_data, base_url),
+                args=(c["name"], c["host"], base_url),
                 daemon=True, name=f"io-{c['host']}",
             ).start()
 
@@ -153,12 +168,10 @@ class MonitorController:
 
     # ── Per-computer I/O worker ───────────────────────────────────────────────
 
-    def _io_worker(
-        self, name: str, host: str, key_data: str, base_url: str
-    ) -> None:
+    def _io_worker(self, name: str, host: str, base_url: str) -> None:
         """
         Pure network thread: authenticate, grab framebuffer, fetch logged-in
-        Windows username, push raw JPEG bytes onto _raw_q.
+        OS username, push raw JPEG bytes onto _raw_q.
         No decoding or inference happens here.
         """
         cfg      = self.cfg
@@ -170,9 +183,7 @@ class MonitorController:
 
             # (Re-)authenticate
             if conn_uid is None:
-                conn_uid = veyon.authenticate(
-                    session, base_url, host, cfg["key_name"], key_data
-                )
+                conn_uid = veyon.authenticate(session, base_url, host, cfg)
                 if conn_uid is None:
                     self._log(f"[{name}] Auth error — retry in 10 s")
                     self._stop.wait(10)
@@ -188,20 +199,20 @@ class MonitorController:
                 conn_uid = None
                 continue
 
-            win_login_raw = veyon.get_logged_user(session, base_url, conn_uid)
-            if win_login_raw:
-                win_login = _parse_win_username(win_login_raw)
-                db_user   = get_user_by_username(win_login)
-                state.computer_users[name]         = db_user["id"] if db_user else None
-                state.computer_win_usernames[name] = win_login
+            os_login_raw = veyon.get_logged_user(session, base_url, conn_uid)
+            if os_login_raw:
+                os_login = _parse_os_username(os_login_raw)
+                db_user  = get_user_by_username(os_login)
+                state.computer_users[name]        = db_user["id"] if db_user else None
+                state.computer_os_usernames[name] = os_login
                 if not db_user:
                     self._log(
-                        f"[{name}] Windows user '{win_login}' — "
+                        f"[{name}] OS user '{os_login}' — "
                         "no system account yet (events logged with username)"
                     )
             else:
-                state.computer_users[name]         = None
-                state.computer_win_usernames[name] = None
+                state.computer_users[name]        = None
+                state.computer_os_usernames[name] = None
 
             try:
                 self._raw_q.put((name, raw), timeout=1.0)
@@ -270,24 +281,24 @@ class MonitorController:
 
                     computer_id = state.computer_ids.get(comp_name)
                     user_id     = state.computer_users.get(comp_name)
-                    win_uname   = state.computer_win_usernames.get(comp_name)
+                    os_uname    = state.computer_os_usernames.get(comp_name)
 
                     if computer_id is not None:
                         ev_id = insert_event(
                             computer_id, dets,
                             user_id=user_id,
-                            windows_username=win_uname,
+                            os_username=os_uname,
                             frame_bytes=frame_bytes,
                             model_id=active_model_id,
                         )
-                        student_disp = win_uname or "—"
+                        n_fired = alert_service.check_and_fire(
+                            ev_id, dets, comp_name,
+                        )
+                        student_disp = os_uname or "—"
                         if user_id:
                             u = get_user_by_id(user_id)
                             if u:
                                 student_disp = u["username"]
-                        n_fired = alert_service.check_and_fire(
-                            ev_id, dets, comp_name, student_disp
-                        )
                         if n_fired:
                             self._log(
                                 f"[{comp_name}] 🔔 {n_fired} alert(s) fired "

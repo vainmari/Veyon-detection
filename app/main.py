@@ -11,6 +11,7 @@ from nicegui import app as nicegui_app, ui
 from app.config import STORAGE_SECRET
 from app.db.database import ensure_default_teacher, init_db, seed_classes
 from app.services.monitor_service import drain_worker
+from app.services.schedule_service import start_scheduler
 
 # Register pages
 import app.pages.login      # noqa: F401
@@ -18,7 +19,10 @@ import app.pages.dashboard  # noqa: F401
 import app.pages.history    # noqa: F401
 import app.pages.analytics  # noqa: F401
 import app.pages.alerts     # noqa: F401
+import app.pages.groups     # noqa: F401
+import app.pages.schedules  # noqa: F401
 import app.pages.models     # noqa: F401
+import app.pages.audit      # noqa: F401
 import app.pages.settings   # noqa: F401
 import app.pages.users      # noqa: F401
 
@@ -29,6 +33,7 @@ def _startup() -> None:
     seed_classes()
     ensure_default_teacher()  # creates admin/admin if no users exist yet
     threading.Thread(target=drain_worker, daemon=True, name="drain").start()
+    start_scheduler()
 
 
 ui.run(

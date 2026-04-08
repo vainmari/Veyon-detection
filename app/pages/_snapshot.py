@@ -10,6 +10,7 @@ Consolidated snapshot viewer.
 from __future__ import annotations
 from typing import Optional
 from nicegui import ui
+from app.translate import t
 
 
 def make_snapshot_dialogs():
@@ -121,7 +122,7 @@ def make_snapshot_dialogs():
                         "opacity: 1;" if _show_ann[0] else "opacity: 0.4;")
 
                 ann_btn = ui.button(
-                    "⊞  Annotations", on_click=_toggle_ann
+                    "⊞  " + t("snapshot_annotations"), on_click=_toggle_ann
                 ).props("flat dense size=xs color=teal")
 
                 # ── Fullscreen ────────────────────────────────────────────────
@@ -158,7 +159,7 @@ def make_snapshot_dialogs():
                         }, 100);
                     """)
 
-                ui.button("⛶  Full screen", on_click=_open_fs).props(
+                ui.button("⛶  " + t("snapshot_fullscreen"), on_click=_open_fs).props(
                     "flat dense size=xs color=teal")
                 ui.button(icon="close", on_click=snap_dlg.close).props(
                     "flat round dense size=xs")

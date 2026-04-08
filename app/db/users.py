@@ -53,9 +53,11 @@ def create_user(
     created_by_id: Optional[int] = None,
 ) -> int:
     """
-    Create a user account and immediately auto-assign matching anonymous events
-    (os_username case-insensitive match) so past data is never lost.
-    Returns the new user's integer id.
+    Insert the user row and log the audit entry.  Returns the new user id.
+
+    Historical event assignment is intentionally NOT done here — call
+    auto_assign_user_events(username, new_id) separately (ideally in a
+    background task) so this function stays fast.
     """
     role_id = get_role_id(role)
     if role_id is None:
@@ -68,26 +70,66 @@ def create_user(
     )
     new_id = cur.lastrowid
     c.commit()
-    _auto_assign_by_username(username, new_id)
     from app.db.audit import log_action
     log_action("user.create", entity="user", entity_id=new_id,
-                detail=f"role={role}, created_by={created_by_id}")
+               detail=f"role={role}, created_by={created_by_id}")
     return new_id
 
 
-def _auto_assign_by_username(username: str, user_id: int) -> int:
+def auto_assign_user_events(username: str, user_id: int, batch_size: int = 500) -> int:
     """
-    Assign all anonymous events whose os_username matches username
-    (case-insensitive).  Returns number of rows updated.
+    Assign all anonymous detection_event rows whose os_username matches
+    *username* (case-insensitive) to *user_id*, working in small batches so
+    the SQLite write lock is held for only a few milliseconds at a time.
+    Returns the total number of rows updated.
     """
     c = _conn()
-    cur = c.execute(
-        "UPDATE detection_event SET user_id = ? "
-        "WHERE LOWER(os_username) = LOWER(?) AND user_id IS NULL",
-        (user_id, username),
-    )
-    c.commit()
-    return cur.rowcount
+    total = 0
+    while True:
+        cur = c.execute(
+            """
+            UPDATE detection_event SET user_id = ?
+            WHERE id IN (
+                SELECT id FROM detection_event
+                WHERE LOWER(os_username) = LOWER(?) AND user_id IS NULL
+                LIMIT ?
+            )
+            """,
+            (user_id, username, batch_size),
+        )
+        c.commit()
+        n = cur.rowcount
+        total += n
+        if n < batch_size:
+            break
+    return total
+
+
+def nullify_user_events(user_id: int, batch_size: int = 500) -> int:
+    """
+    Set user_id = NULL on all detection_event rows for *user_id* in batches
+    before the user row is deleted.  This way the subsequent DELETE has no
+    ON DELETE SET NULL cascade work to do and completes instantly.
+    Returns the total number of rows cleared.
+    """
+    c = _conn()
+    total = 0
+    while True:
+        cur = c.execute(
+            """
+            UPDATE detection_event SET user_id = NULL
+            WHERE id IN (
+                SELECT id FROM detection_event WHERE user_id = ? LIMIT ?
+            )
+            """,
+            (user_id, batch_size),
+        )
+        c.commit()
+        n = cur.rowcount
+        total += n
+        if n < batch_size:
+            break
+    return total
 
 
 def update_password(user_id: int, new_password: str) -> None:
@@ -102,10 +144,10 @@ def update_password(user_id: int, new_password: str) -> None:
 
 
 def delete_user(user_id: int) -> None:
-    from app.db.audit import log_action
-    log_action("user.delete", entity="user", entity_id=user_id)
+    from app.db.audit import _insert_audit
     c = _conn()
     c.execute("DELETE FROM user WHERE id = ?", (user_id,))
+    _insert_audit(c, "user.delete", entity="user", entity_id=user_id)
     c.commit()
 
 

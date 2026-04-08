@@ -2,16 +2,21 @@
 app/pages/users.py
 ──────────────────
 User management page  /users  (teacher + admin)
+
+Heavy DB work (auto-assigning historical events on create, nullifying events
+on delete) runs in background asyncio tasks so the UI returns immediately.
 """
 import asyncio
 from nicegui import ui
+from nicegui import context as _ctx
 
 from app.core.auth import is_admin, require_auth
 from app.db.database import (
+    auto_assign_user_events,
     create_user,
     delete_user,
     list_users,
-    query_events,
+    nullify_user_events,
 )
 from app.pages._nav import nav
 from app.translate import t
@@ -80,10 +85,9 @@ def page_users() -> None:
                         form_msg.classes(replace="text-sm text-red-500")
                         return
 
-                    create_btn.props("disable")
+                    create_btn.props("loading")
                     form_msg.set_text(t("users_creating"))
-                    form_msg.classes(
-                        replace="text-sm text-gray-500 dark:text-gray-400")
+                    form_msg.classes(replace="text-sm text-gray-500 dark:text-gray-400")
 
                     loop = asyncio.get_event_loop()
                     try:
@@ -93,31 +97,27 @@ def page_users() -> None:
                                 created_by_id=current["id"],
                             )
                         )
+                        # Show success immediately — event assignment runs in background
                         if role == "student":
-                            assigned = await loop.run_in_executor(
-                                None, lambda: len(query_events(user_id=new_uid))
-                            )
-                            suffix = (
-                                t("users_auto_assigned").format(n=assigned)
-                                if assigned else ""
-                            )
                             form_msg.set_text(
-                                t("users_created_student").format(
-                                    uname=uname, suffix=suffix))
+                                t("users_created_linking").format(uname=uname))
                         else:
                             form_msg.set_text(
                                 t("users_created_teacher").format(uname=uname))
-
                         form_msg.classes(replace="text-sm text-green-600")
                         new_username.set_value("")
                         new_password.set_value("")
-                        await loop.run_in_executor(None, _refresh)
+                        _refresh()
+
+                        if role == "student":
+                            asyncio.create_task(
+                                _assign_events_bg(new_uid, uname, form_msg, _ctx.client))
 
                     except Exception as e:
                         form_msg.set_text(t("users_error").format(e=e))
                         form_msg.classes(replace="text-sm text-red-500")
                     finally:
-                        create_btn.props(remove="disable")
+                        create_btn.props(remove="loading")
 
                 create_btn.on_click(do_create)
 
@@ -169,6 +169,7 @@ def page_users() -> None:
             row  = e.args
             uid  = row.get("id")
             role = row.get("role", "")
+            uname = row.get("username", str(uid))
             if not uid or int(uid) == current["id"]:
                 return
             can_delete = (
@@ -177,15 +178,11 @@ def page_users() -> None:
             )
             if not can_delete:
                 return
-            loop = asyncio.get_event_loop()
-            try:
-                await loop.run_in_executor(
-                    None, lambda: delete_user(int(uid))
-                )
-                ui.notify(t("users_deleted"), type="warning")
-                await loop.run_in_executor(None, _refresh)
-            except Exception as ex:
-                ui.notify(t("users_delete_failed").format(e=ex), type="negative")
+            # Remove from table immediately so the user can't double-click
+            tbl.rows = [r for r in tbl.rows if r.get("id") != uid]
+            tbl.update()
+            client = _ctx.client
+            asyncio.create_task(_delete_user_bg(int(uid), uname, client))
 
         tbl.on("delete_user", handle_delete)
 
@@ -194,3 +191,49 @@ def page_users() -> None:
         tbl.update()
 
     _refresh()
+
+    # ── Background tasks ──────────────────────────────────────────────────────
+
+    async def _assign_events_bg(
+        user_id: int, username: str, msg_label: ui.label, client,
+    ) -> None:
+        """Assign historical events to a newly created student in the background."""
+        loop = asyncio.get_event_loop()
+        try:
+            n = await loop.run_in_executor(
+                None, lambda: auto_assign_user_events(username, user_id)
+            )
+            with client:
+                if n:
+                    msg_label.set_text(
+                        t("users_auto_assigned_done").format(uname=username, n=n))
+                else:
+                    msg_label.set_text(
+                        t("users_created_student").format(uname=username, suffix=""))
+        except Exception:
+            pass  # non-critical — user was already created successfully
+
+    async def _delete_user_bg(user_id: int, username: str, client) -> None:
+        """Nullify events in batches then delete the user row."""
+        loop = asyncio.get_event_loop()
+        with client:
+            notif = ui.notify(
+                t("users_deleting_bg").format(uname=username),
+                type="ongoing", spinner=True, timeout=0,
+            )
+        try:
+            await loop.run_in_executor(
+                None, lambda: nullify_user_events(user_id)
+            )
+            await loop.run_in_executor(
+                None, lambda: delete_user(user_id)
+            )
+            with client:
+                notif.dismiss()
+                ui.notify(t("users_deleted"), type="warning")
+                _refresh()
+        except Exception as ex:
+            with client:
+                notif.dismiss()
+                ui.notify(t("users_delete_failed").format(e=ex), type="negative")
+                _refresh()  # re-add the row if delete failed

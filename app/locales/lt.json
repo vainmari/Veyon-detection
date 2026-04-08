@@ -343,5 +343,14 @@
   "settings_alert_hint": "Nustatykite 1, kad įspėtumėte apie kiekvieną aptikimą. Nustatykite 2 arba 3, kad reikalautumėte pasikartojančių aptikimų prieš pranešant (mažina klaidingus teigiamus).",
   "settings_save_btn": "💾  Išsaugoti nustatymus",
   "settings_save_note": "Pakeitimai įsigalioja kitą kartą paspaudus „Pradėti“.",
-  "settings_saved": "✅ Nustatymai išsaugoti — paleiskite stebėjimą iš naujo, kad pritaikytumėte"
+  "settings_saved": "✅ Nustatymai išsaugoti — paleiskite stebėjimą iš naujo, kad pritaikytumėte",
+  "history_page_size": "Puslapyje",
+  "history_page_info": "{first}–{last}{suffix}  ({page} psl.)",
+  "users_deleting": "Trinamas vartotojas ir atsiejami įrašai...",
+  "users_created_linking": "Vartotojas {uname} sukurtas. Siejami istoriniai įrašai...",
+  "users_auto_assigned_done": "Vartotojas {uname} paruoštas — susieta {n} istorinių įrašų.",
+  "users_deleting_bg": "Trinamas {uname} — atsiejami įrašai fone...",
+  "history_page_info_total": "{first}–{last} iš {total}  ({page}/{pages} psl.)",
+  "snapshot_annotations": "Anotacijos",
+  "snapshot_fullscreen": "Pilnas ekranas"
 }

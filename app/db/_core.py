@@ -35,6 +35,7 @@ def _conn() -> sqlite3.Connection:
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA journal_mode  = WAL")
         conn.execute("PRAGMA synchronous   = NORMAL")
+        conn.execute("PRAGMA busy_timeout  = 10000")  # retry lock waits up to 10 s
         conn.execute("PRAGMA cache_size    = -8192")  # 8 MB per-thread page cache
         conn.execute("PRAGMA temp_store    = MEMORY")
         _tls.conn    = conn

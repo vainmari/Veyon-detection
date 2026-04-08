@@ -14,6 +14,7 @@ from app.db.database import (
     query_events,
 )
 from app.pages._nav import nav
+from app.translate import t
 
 
 @ui.page("/users")
@@ -25,7 +26,7 @@ def page_users() -> None:
     admin = is_admin(current)
 
     with ui.column().classes("w-full p-4 gap-4"):
-        ui.label("User Management").classes("text-xl font-bold")
+        ui.label(t("users_title")).classes("text-xl font-bold")
 
         # ── Info banner ───────────────────────────────────────────────────────
         with ui.card().classes(
@@ -34,49 +35,40 @@ def page_users() -> None:
             "dark:bg-blue-950 dark:border-blue-700"
         ):
             ui.markdown(
-                "**Student usernames must match their Windows login name** "
-                "(e.g. `Lina` — the part after the backslash).  \n"
-                "Previously recorded events are **automatically assigned** "
-                "when a matching student account is created.  \n"
-                + (
-                    "As **admin** you can also create teacher accounts — "
-                    "their username can be anything."
-                    if admin else
-                    "As **teacher** you can create and delete student accounts."
-                )
+                t("users_info_admin") if admin else t("users_info_teacher")
             ).classes("text-sm text-blue-900 dark:text-blue-200")
 
         # ── Create user form ──────────────────────────────────────────────────
         with ui.card().classes("w-full"):
-            ui.label("Create Account").classes(
+            ui.label(t("users_create_section")).classes(
                 "text-sm font-semibold text-gray-600 dark:text-gray-400 mb-2")
             with ui.row().classes("gap-3 items-end flex-wrap"):
-                new_username = ui.input("Username").props(
+                new_username = ui.input(t("users_username")).props(
                     "dense outlined").classes("w-52")
                 new_password = ui.input(
-                    "Temporary password",
+                    t("users_temp_password"),
                     password=True,
                     password_toggle_button=True,
                 ).props("dense outlined").classes("w-52")
 
                 if admin:
                     new_role = ui.select(
-                        {"student": "Student", "teacher": "Teacher"},
-                        value="student", label="Role",
+                        {"student": t("users_role_student"),
+                         "teacher": t("users_role_teacher")},
+                        value="student", label=t("users_role"),
                     ).props("dense outlined").classes("w-32")
-                    role_hint = ui.label("Windows login name for students"
-                                        ).classes(
+                    role_hint = ui.label(t("users_hint_windows")).classes(
                         "text-xs text-gray-500 dark:text-gray-500 self-end pb-1")
 
                     def _update_hint() -> None:
                         role_hint.set_text(
-                            "Windows login name" if new_role.value == "student"
-                            else "Any username"
+                            t("users_hint_student") if new_role.value == "student"
+                            else t("users_hint_any")
                         )
                     new_role.on_value_change(lambda _: _update_hint())
 
                 form_msg   = ui.label("").classes("text-sm")
-                create_btn = ui.button("Create").props("color=primary dense")
+                create_btn = ui.button(t("users_create_btn")).props("color=primary dense")
 
                 async def do_create() -> None:
                     uname = new_username.value.strip()
@@ -84,12 +76,12 @@ def page_users() -> None:
                     role  = new_role.value if admin else "student"
 
                     if not uname or not pwd:
-                        form_msg.set_text("Fill in both fields")
+                        form_msg.set_text(t("users_fill_fields"))
                         form_msg.classes(replace="text-sm text-red-500")
                         return
 
                     create_btn.props("disable")
-                    form_msg.set_text("Creating…")
+                    form_msg.set_text(t("users_creating"))
                     form_msg.classes(
                         replace="text-sm text-gray-500 dark:text-gray-400")
 
@@ -106,13 +98,15 @@ def page_users() -> None:
                                 None, lambda: len(query_events(user_id=new_uid))
                             )
                             suffix = (
-                                f" — {assigned} previous event(s) auto-assigned"
+                                t("users_auto_assigned").format(n=assigned)
                                 if assigned else ""
                             )
                             form_msg.set_text(
-                                f"✅ Student '{uname}' created{suffix}")
+                                t("users_created_student").format(
+                                    uname=uname, suffix=suffix))
                         else:
-                            form_msg.set_text(f"✅ Teacher '{uname}' created")
+                            form_msg.set_text(
+                                t("users_created_teacher").format(uname=uname))
 
                         form_msg.classes(replace="text-sm text-green-600")
                         new_username.set_value("")
@@ -120,7 +114,7 @@ def page_users() -> None:
                         await loop.run_in_executor(None, _refresh)
 
                     except Exception as e:
-                        form_msg.set_text(f"Error: {e}")
+                        form_msg.set_text(t("users_error").format(e=e))
                         form_msg.classes(replace="text-sm text-red-500")
                     finally:
                         create_btn.props(remove="disable")
@@ -129,11 +123,11 @@ def page_users() -> None:
 
         # ── User table ────────────────────────────────────────────────────────
         cols = [
-            {"name": "username",   "label": "Username",
+            {"name": "username",   "label": t("users_col_username"),
              "field": "username",   "sortable": True, "align": "left"},
-            {"name": "role",       "label": "Role",
+            {"name": "role",       "label": t("users_col_role"),
              "field": "role",       "sortable": True, "align": "left"},
-            {"name": "created_at", "label": "Created",
+            {"name": "created_at", "label": t("users_col_created"),
              "field": "created_at", "sortable": True, "align": "left"},
             {"name": "actions",    "label": "",
              "field": "id",         "align": "right"},
@@ -188,10 +182,10 @@ def page_users() -> None:
                 await loop.run_in_executor(
                     None, lambda: delete_user(int(uid))
                 )
-                ui.notify("User deleted", type="warning")
+                ui.notify(t("users_deleted"), type="warning")
                 await loop.run_in_executor(None, _refresh)
             except Exception as ex:
-                ui.notify(f"Delete failed: {ex}", type="negative")
+                ui.notify(t("users_delete_failed").format(e=ex), type="negative")
 
         tbl.on("delete_user", handle_delete)
 

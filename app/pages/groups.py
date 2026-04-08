@@ -25,6 +25,7 @@ from app.db.database import (
     upsert_computer,
 )
 from app.pages._nav import nav
+from app.translate import t
 
 
 @ui.page("/groups")
@@ -36,13 +37,10 @@ def page_groups() -> None:
     _uid = current["id"]
 
     with ui.column().classes("w-full max-w-4xl mx-auto p-4 gap-4"):
-        ui.label("Computer Groups").classes("text-xl font-bold")
+        ui.label(t("groups_title")).classes("text-xl font-bold")
 
-        ui.markdown(
-            "Organise monitored computers into logical groups — one per lab or room.  \n"
-            "A computer can belong to **multiple groups**. "
-            "Groups are referenced by **Schedules** to target automatic monitoring."
-        ).classes("text-sm text-gray-500 dark:text-gray-400")
+        ui.markdown(t("groups_intro")).classes(
+            "text-sm text-gray-500 dark:text-gray-400")
 
         # ── Create / Edit dialog ──────────────────────────────────────────────
         with ui.dialog() as dlg, ui.card().classes("p-5 gap-3 min-w-96"):
@@ -50,46 +48,46 @@ def page_groups() -> None:
             dlg_id    = [None]
 
             with ui.row().classes("w-full items-center gap-3"):
-                ui.label("Name").classes("w-32 text-sm")
+                ui.label(t("groups_name")).classes("w-32 text-sm")
                 dlg_name = ui.input().props("dense outlined").classes("flex-1")
             with ui.row().classes("w-full items-center gap-3"):
-                ui.label("Description").classes("w-32 text-sm")
+                ui.label(t("groups_description")).classes("w-32 text-sm")
                 dlg_desc = ui.input().props("dense outlined").classes("flex-1")
 
             with ui.row().classes("gap-2 mt-1"):
                 def _save() -> None:
                     name = dlg_name.value.strip()
                     if not name:
-                        ui.notify("Name is required.", type="negative")
+                        ui.notify(t("groups_name_required"), type="negative")
                         return
                     if dlg_id[0] is None:
                         gid = create_group(name, dlg_desc.value.strip())
                         log_action("group.create", user_id=_uid,
                                    entity="computer_group", entity_id=gid,
                                    detail=f"name={name}")
-                        ui.notify(f"Group '{name}' created.", type="positive")
+                        ui.notify(t("groups_created").format(name=name), type="positive")
                     else:
                         update_group(dlg_id[0], name, dlg_desc.value.strip())
                         log_action("group.update", user_id=_uid,
                                    entity="computer_group", entity_id=dlg_id[0],
                                    detail=f"name={name}")
-                        ui.notify(f"Group '{name}' updated.", type="positive")
+                        ui.notify(t("groups_updated").format(name=name), type="positive")
                     dlg.close()
                     _groups_panel.refresh()
 
-                ui.button("Save", icon="save", on_click=_save).props("color=primary")
-                ui.button("Cancel", on_click=dlg.close).props("flat")
+                ui.button(t("groups_save"), icon="save", on_click=_save).props("color=primary")
+                ui.button(t("groups_cancel"), on_click=dlg.close).props("flat")
 
         def _open_create() -> None:
             dlg_id[0] = None
-            dlg_title.set_text("New Group")
+            dlg_title.set_text(t("groups_new"))
             dlg_name.set_value("")
             dlg_desc.set_value("")
             dlg.open()
 
         def _open_edit(g: dict) -> None:
             dlg_id[0] = g["id"]
-            dlg_title.set_text(f"Edit — {g['name']}")
+            dlg_title.set_text(t("groups_edit").format(name=g["name"]))
             dlg_name.set_value(g["name"])
             dlg_desc.set_value(g.get("description") or "")
             dlg.open()
@@ -98,9 +96,8 @@ def page_groups() -> None:
         with ui.dialog() as assign_dlg, \
              ui.card().classes("p-5 gap-3").style("min-width:480px; max-width:95vw;"):
             assign_title  = ui.label("").classes("text-lg font-bold mb-1")
-            assign_hint   = ui.label(
-                "A computer can be in multiple groups simultaneously."
-            ).classes("text-xs text-gray-500 dark:text-gray-400 -mt-1")
+            assign_hint   = ui.label(t("groups_assign_hint")).classes(
+                "text-xs text-gray-500 dark:text-gray-400 -mt-1")
             assign_gid    = [None]
             assign_checks: dict[int, ui.checkbox] = {}
 
@@ -108,14 +105,14 @@ def page_groups() -> None:
 
             def _load_assign(group: dict) -> None:
                 assign_gid[0] = group["id"]
-                assign_title.set_text(f"Assign computers — {group['name']}")
+                assign_title.set_text(t("groups_assign_title").format(name=group["name"]))
                 assign_checks.clear()
                 assign_body.clear()
                 all_comps  = list_computers()
                 in_grp_ids = {c["id"] for c in list_computers_in_group(group["id"])}
                 with assign_body:
                     if not all_comps:
-                        ui.label("No computers registered yet.").classes(
+                        ui.label(t("groups_no_computers")).classes(
                             "text-sm text-gray-500")
                     for comp in all_comps:
                         cb = ui.checkbox(
@@ -138,13 +135,13 @@ def page_groups() -> None:
                            entity="computer_group", entity_id=gid,
                            detail=f"+{n_added}/-{n_removed} computers")
                 assign_dlg.close()
-                ui.notify("Computer assignments saved.", type="positive")
+                ui.notify(t("groups_assign_saved"), type="positive")
                 _groups_panel.refresh()
 
             with ui.row().classes("gap-2 mt-2"):
-                ui.button("Save", icon="save",
+                ui.button(t("groups_save"), icon="save",
                           on_click=_save_assign).props("color=primary")
-                ui.button("Cancel", on_click=assign_dlg.close).props("flat")
+                ui.button(t("groups_cancel"), on_click=assign_dlg.close).props("flat")
 
         # ── Veyon location import ─────────────────────────────────────────────
         def _import_veyon_locations() -> None:
@@ -154,28 +151,21 @@ def page_groups() -> None:
             cfg = get_settings()
             veyon_cli = cfg.get("veyon_cli", "")
             if not veyon_cli:
-                ui.notify("veyon-cli path not set in Settings.", type="negative")
+                ui.notify(t("groups_veyon_cli_missing"), type="negative")
                 return
             try:
                 locations = list_locations(veyon_cli)
             except FileNotFoundError:
-                ui.notify(
-                    f"veyon-cli not found at: {veyon_cli}",
-                    type="negative",
-                )
+                ui.notify(t("groups_veyon_not_found").format(path=veyon_cli), type="negative")
                 return
             except subprocess.TimeoutExpired:
-                ui.notify("veyon-cli timed out.", type="negative")
+                ui.notify(t("groups_veyon_timeout"), type="negative")
                 return
             except Exception as e:
-                ui.notify(f"Import failed: {e}", type="negative")
+                ui.notify(t("groups_import_failed").format(e=e), type="negative")
                 return
             if not locations:
-                ui.notify(
-                    "No computers found in Veyon config. "
-                    "Check that BuiltinDirectory/NetworkObjects is populated.",
-                    type="warning",
-                )
+                ui.notify(t("groups_no_veyon_comps"), type="warning")
                 return
             n_groups = n_comps = 0
             for loc in locations:
@@ -188,7 +178,7 @@ def page_groups() -> None:
             log_action("group.import_veyon", user_id=_uid,
                        detail=f"{n_groups} groups, {n_comps} computers")
             ui.notify(
-                f"Imported {n_groups} group(s) with {n_comps} computer(s).",
+                t("groups_imported").format(n_groups=n_groups, n_comps=n_comps),
                 type="positive",
             )
             _groups_panel.refresh()
@@ -197,12 +187,11 @@ def page_groups() -> None:
         with ui.dialog() as raw_dlg, ui.card().classes("p-4").style(
             "min-width:600px; max-width:95vw;"
         ):
-            ui.label("Raw Veyon NetworkObjects JSON").classes(
-                "text-base font-bold mb-2")
+            ui.label(t("groups_raw_title")).classes("text-base font-bold mb-2")
             raw_area = ui.textarea().props(
                 "outlined readonly rows=20"
             ).classes("w-full font-mono text-xs")
-            ui.button("Close", on_click=raw_dlg.close).props("flat dense")
+            ui.button(t("groups_raw_close"), on_click=raw_dlg.close).props("flat dense")
 
         def _show_raw() -> None:
             import json as _json
@@ -211,7 +200,7 @@ def page_groups() -> None:
             cfg = get_settings()
             veyon_cli = cfg.get("veyon_cli", "")
             if not veyon_cli:
-                ui.notify("veyon-cli path not set in Settings.", type="negative")
+                ui.notify(t("groups_veyon_cli_missing"), type="negative")
                 return
             try:
                 r = subprocess.run(
@@ -221,7 +210,6 @@ def page_groups() -> None:
                 raw = r.stdout.strip()
                 if "=" in raw:
                     raw = raw.split("=", 1)[1].strip()
-                # Pretty-print JSON if possible
                 try:
                     raw = _json.dumps(_json.loads(raw), indent=2)
                 except Exception:
@@ -235,16 +223,16 @@ def page_groups() -> None:
         with ui.row().classes("items-center justify-between w-full"):
             ui.label("").classes("flex-1")
             ui.button(
-                "Show Raw Config",
+                t("groups_show_raw"),
                 icon="code",
                 on_click=_show_raw,
             ).props("outline dense color=gray").classes("mr-2")
             ui.button(
-                "Import Veyon Locations",
+                t("groups_import_veyon"),
                 icon="download",
                 on_click=_import_veyon_locations,
             ).props("outline dense color=teal").classes("mr-2")
-            ui.button("+ New Group", on_click=_open_create).props(
+            ui.button(t("groups_btn_new"), on_click=_open_create).props(
                 "color=primary dense")
 
         @ui.refreshable
@@ -252,21 +240,20 @@ def page_groups() -> None:
             groups = list_groups()
             if not groups:
                 with ui.card().classes("w-full"):
-                    ui.label("No groups yet — create one or import from Veyon.").classes(
-                        "text-sm text-gray-500")
+                    ui.label(t("groups_no_groups")).classes("text-sm text-gray-500")
                 return
 
             cols = [
-                {"name": "name",   "label": "Group",       "field": "name",
-                 "sortable": True, "align": "left"},
-                {"name": "desc",   "label": "Description",  "field": "description",
-                 "sortable": False, "align": "left"},
-                {"name": "count",  "label": "Computers",   "field": "computer_count",
-                 "sortable": True, "align": "center"},
-                {"name": "created","label": "Created",      "field": "created_at",
-                 "sortable": True, "align": "left"},
-                {"name": "actions","label": "",             "field": "id",
-                 "align": "right"},
+                {"name": "name",   "label": t("groups_col_group"),
+                 "field": "name",       "sortable": True, "align": "left"},
+                {"name": "desc",   "label": t("groups_col_desc"),
+                 "field": "description","sortable": False, "align": "left"},
+                {"name": "count",  "label": t("groups_col_computers"),
+                 "field": "computer_count","sortable": True, "align": "center"},
+                {"name": "created","label": t("groups_col_created"),
+                 "field": "created_at", "sortable": True, "align": "left"},
+                {"name": "actions","label": "",
+                 "field": "id",         "align": "right"},
             ]
             rows = [
                 {**g, "description": g.get("description") or "—"}
@@ -308,7 +295,7 @@ def page_groups() -> None:
                     log_action("group.delete", user_id=_uid,
                                entity="computer_group", entity_id=gid_int,
                                detail=f"name={g['name'] if g else '?'}")
-                    ui.notify("Group deleted.", type="warning")
+                    ui.notify(t("groups_deleted"), type="warning")
                     _groups_panel.refresh()
 
             tbl.on("assign", on_assign)

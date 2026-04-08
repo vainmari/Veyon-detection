@@ -14,6 +14,7 @@ from app.core.yolo import reset_model
 from app.db.database import list_groups, list_computers_in_group, log_action
 from app.pages._nav import nav
 from app.services.monitor_service import MonitorController
+from app.translate import t
 
 
 @ui.page("/")
@@ -34,41 +35,40 @@ def page_dashboard() -> None:
                     # Build status text — include group name when running
                     def _status_text() -> str:
                         if state.monitor is None:
-                            return "● Stopped"
+                            return t("status_stopped")
                         g = state.monitored_group_name
-                        return f"● Running ({g})" if g else "● Running (all)"
+                        return (
+                            t("status_running_group").format(g=g)
+                            if g else t("status_running_all")
+                        )
                     status_lbl = ui.label(_status_text()).classes(
                         "font-mono text-sm " +
                         ("text-green-500 dark:text-green-400"
                          if running else
                          "text-red-500 dark:text-red-400")
                     )
-                    btn_start = ui.button("▶  Start", color="green")
-                    btn_stop  = ui.button("■  Stop",  color="red")
+                    btn_start = ui.button(t("dash_btn_start"), color="green")
+                    btn_stop  = ui.button(t("dash_btn_stop"),  color="red")
                     if running:
                         btn_start.props("disable")
                     else:
                         btn_stop.props("disable")
 
                     # Group selector — 0 = "All computers", >0 = specific group id
-                    # NiceGUI ui.select dict format: {stored_value: displayed_label}
                     groups = list_groups()
-                    group_opts: dict[int, str] = {0: "All computers"}
+                    group_opts: dict[int, str] = {0: t("dash_all_computers")}
                     group_opts.update({g["id"]: g["name"] for g in groups})
                     with ui.row().classes("items-center gap-1"):
-                        ui.label("Group:").classes(
+                        ui.label(t("dash_group_label")).classes(
                             "text-sm text-gray-500 dark:text-gray-400")
                         group_sel = ui.select(
                             options=group_opts,
                             value=0,
                         ).props("dense outlined").classes("w-44")
-                        group_sel.tooltip(
-                            "Monitor only computers in the selected group, "
-                            "or all Veyon-discovered computers"
-                        )
+                        group_sel.tooltip(t("dash_group_tooltip"))
 
                     with ui.row().classes("items-center gap-2 ml-auto"):
-                        ui.label("Computer:").classes(
+                        ui.label(t("dash_computer_label")).classes(
                             "text-sm text-gray-500 dark:text-gray-400")
                         pc_sel = ui.select(
                             options=list(state.latest_frames.keys()),
@@ -77,11 +77,10 @@ def page_dashboard() -> None:
 
             with ui.card().classes("w-full"):
                 with ui.row().classes("items-center justify-between mb-1"):
-                    ui.label("Live Preview").classes(
+                    ui.label(t("dash_live_preview")).classes(
                         "text-xs text-gray-500 dark:text-gray-400")
-                    ann_switch = ui.switch("Annotations", value=True).props("dense")
-                    ann_switch.tooltip(
-                        "Toggle bounding-box overlay on the live preview")
+                    ann_switch = ui.switch(t("dash_annotations"), value=True).props("dense")
+                    ann_switch.tooltip(t("dash_ann_tooltip"))
 
                 live_img = ui.image("").props("no-spinner").classes(
                     "w-full rounded"
@@ -90,26 +89,26 @@ def page_dashboard() -> None:
             with ui.card().classes("w-full"):
                 with ui.row().classes("items-center gap-4"):
                     with ui.column().classes("gap-0"):
-                        ui.label("Active Student").classes(
+                        ui.label(t("dash_active_student")).classes(
                             "text-xs text-gray-500 dark:text-gray-400")
                         student_lbl = ui.label("—").classes(
                             "font-mono text-sm "
                             "text-yellow-600 dark:text-yellow-300")
                     ui.separator().props("vertical")
                     with ui.column().classes("gap-0"):
-                        ui.label("Last Detections").classes(
+                        ui.label(t("dash_last_detections")).classes(
                             "text-xs text-gray-500 dark:text-gray-400")
-                        det_info = ui.label("— no detections —").classes(
+                        det_info = ui.label(t("dash_no_detections")).classes(
                             "font-mono text-sm "
                             "text-blue-600 dark:text-blue-300")
 
         # ── Right column: console ─────────────────────────────────────────────
         with ui.card().classes("w-80 flex-shrink-0 flex flex-col"):
             with ui.row().classes("items-center justify-between mb-1 flex-shrink-0"):
-                ui.label("Console  ↑ newest first").classes(
+                ui.label(t("dash_console_title")).classes(
                     "text-xs text-gray-500 dark:text-gray-400")
                 ui.button(
-                    "Clear",
+                    t("dash_clear"),
                     on_click=lambda: (
                         log_view.set_value(""),
                         log_offset.__setitem__(0, len(state.log_buffer)),
@@ -135,7 +134,7 @@ def page_dashboard() -> None:
         try:
             cfg = collect_cfg()
         except (ValueError, KeyError) as e:
-            ui.notify(f"Config error: {e}", type="negative"); return
+            ui.notify(t("dash_cfg_error").format(e=e), type="negative"); return
 
         # Resolve computers for the selected group (0 = all)
         gid   = group_sel.value   # 0 = all computers, >0 = group id
@@ -146,7 +145,7 @@ def page_dashboard() -> None:
             rows = list_computers_in_group(gid)
             if not rows:
                 ui.notify(
-                    f"Group '{gname}' has no computers assigned.", type="warning"
+                    t("dash_no_computers").format(gname=gname), type="warning"
                 )
                 return
             computers = [{"name": r["name"], "host": r["host_address"]} for r in rows]
@@ -161,7 +160,10 @@ def page_dashboard() -> None:
         btn_start.props("disable")
         btn_stop.props(remove="disable")
         group_sel.props("disable")
-        label = f"● Running ({gname})" if gid else "● Running (all)"
+        label = (
+            t("status_running_group").format(g=gname)
+            if gid else t("status_running_all")
+        )
         status_lbl.set_text(label)
         status_lbl.classes(
             replace="font-mono text-sm text-green-500 dark:text-green-400")
@@ -178,7 +180,7 @@ def page_dashboard() -> None:
         btn_start.props(remove="disable")
         btn_stop.props("disable")
         group_sel.props(remove="disable")
-        status_lbl.set_text("● Stopped")
+        status_lbl.set_text(t("status_stopped"))
         status_lbl.classes(
             replace="font-mono text-sm text-red-500 dark:text-red-400")
 
@@ -204,7 +206,10 @@ def page_dashboard() -> None:
         # ── Keep status / buttons in sync with scheduler-driven start/stop ────
         if state.monitor is not None:
             g = state.monitored_group_name
-            lbl = f"● Running ({g})" if g else "● Running (all)"
+            lbl = (
+                t("status_running_group").format(g=g)
+                if g else t("status_running_all")
+            )
             if status_lbl.text != lbl:
                 status_lbl.set_text(lbl)
                 status_lbl.classes(
@@ -213,8 +218,9 @@ def page_dashboard() -> None:
                 btn_stop.props(remove="disable")
                 group_sel.props("disable")
         else:
-            if status_lbl.text != "● Stopped":
-                status_lbl.set_text("● Stopped")
+            stopped = t("status_stopped")
+            if status_lbl.text != stopped:
+                status_lbl.set_text(stopped)
                 status_lbl.classes(
                     replace="font-mono text-sm text-red-500 dark:text-red-400")
                 btn_start.props(remove="disable")
@@ -248,12 +254,12 @@ def page_dashboard() -> None:
                 u = get_user_by_id(uid)
                 student_lbl.set_text(u["username"] if u else "—")
             else:
-                student_lbl.set_text("— not matched —")
+                student_lbl.set_text(t("dash_not_matched"))
 
             det_info.set_text(
                 "  |  ".join(
                     f"{d['class_name']} {d['conf']:.0%}" for d in dets)
-                if dets else "— no detections —"
+                if dets else t("dash_no_detections")
             )
 
     ui.timer(0.1, tick)

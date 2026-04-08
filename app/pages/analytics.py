@@ -22,6 +22,7 @@ from app.db.database import (
     list_users,
 )
 from app.pages._nav import nav
+from app.translate import t
 
 
 @ui.page("/analytics")
@@ -33,7 +34,7 @@ def page_analytics() -> None:
     is_teacher = current["role"] == "teacher"
 
     with ui.column().classes("w-full p-4 gap-4"):
-        ui.label("Analytics").classes("text-2xl font-bold")
+        ui.label(t("analytics_title")).classes("text-2xl font-bold")
 
         with ui.card().classes("w-full"):
             with ui.row().classes("gap-4 flex-wrap items-end"):
@@ -42,44 +43,44 @@ def page_analytics() -> None:
                 default_from = (today - timedelta(days=29)).isoformat()
                 default_to   = today.isoformat()
 
-                f_from = ui.input("From", value=default_from).props(
+                f_from = ui.input(t("analytics_from"), value=default_from).props(
                     "dense outlined type=date").classes("w-40")
-                f_to   = ui.input("To",   value=default_to).props(
+                f_to   = ui.input(t("analytics_to"),   value=default_to).props(
                     "dense outlined type=date").classes("w-40")
 
                 if is_teacher:
-                    computers = [{"label": "All computers", "value": ""}] + [
+                    computers = [{"label": t("analytics_all_computers"), "value": ""}] + [
                         {"label": c["name"], "value": str(c["id"])}
                         for c in list_computers()
                     ]
                     f_computer = ui.select(
                         {c["value"]: c["label"] for c in computers},
-                        value="", label="Computer",
+                        value="", label=t("analytics_computer"),
                     ).props("dense outlined").classes("w-44")
 
-                    students = [{"label": "All students", "value": ""}] + [
+                    students = [{"label": t("analytics_all_students"), "value": ""}] + [
                         {"label": u["username"], "value": str(u["id"])}
                         for u in list_users() if u["role"] == "student"
                     ]
                     f_student = ui.select(
                         {s["value"]: s["label"] for s in students},
-                        value="", label="Student",
+                        value="", label=t("analytics_student"),
                     ).props("dense outlined").classes("w-44")
 
-                ui.button("Apply", on_click=lambda: _refresh()).props("color=primary")
+                ui.button(t("analytics_apply"), on_click=lambda: _refresh()).props("color=primary")
 
         # ── Summary stat cards ────────────────────────────────────────────────
         with ui.row().classes("w-full gap-4 flex-wrap"):
-            card_total    = _stat_card("Total events",     "—", "gray")
-            card_hits     = _stat_card("Detection events", "—", "red")
-            card_students = _stat_card("Active students",  "—", "blue")
-            card_top      = _stat_card("Most detected",    "—", "green")
+            card_total    = _stat_card(t("analytics_total_events"),     "—", "gray")
+            card_hits     = _stat_card(t("analytics_detection_events"), "—", "red")
+            card_students = _stat_card(t("analytics_active_students"),  "—", "blue")
+            card_top      = _stat_card(t("analytics_most_detected"),    "—", "green")
 
         # ── Charts row ────────────────────────────────────────────────────────
         with ui.row().classes("w-full gap-4 flex-wrap items-start"):
 
             with ui.card().classes("flex-1 min-w-72"):
-                ui.label("Detection Class Distribution").classes(
+                ui.label(t("analytics_class_dist")).classes(
                     "text-sm font-semibold text-gray-600 dark:text-gray-400 mb-2")
                 donut = ui.echart({
                     "tooltip": {"trigger": "item", "formatter": "{b}: {c} ({d}%)"},
@@ -93,11 +94,11 @@ def page_analytics() -> None:
                 }).classes("w-full").style("height:320px")
 
             with ui.card().classes("flex-2 min-w-96"):
-                ui.label("Daily Activity").classes(
+                ui.label(t("analytics_daily_activity")).classes(
                     "text-sm font-semibold text-gray-600 dark:text-gray-400 mb-2")
                 bar_daily = ui.echart({
                     "tooltip": {"trigger": "axis"},
-                    "legend":  {"data": ["All events", "Detections"],
+                    "legend":  {"data": [t("analytics_all_events"), t("analytics_detections")],
                                 "textStyle": {"color": "#888"}},
                     "grid":    {"left": "3%", "right": "4%",
                                 "bottom": "3%", "containLabel": True},
@@ -106,10 +107,10 @@ def page_analytics() -> None:
                     "yAxis":   {"type": "value",
                                 "axisLabel": {"color": "#888"}},
                     "series": [
-                        {"name": "All events", "type": "bar",
+                        {"name": t("analytics_all_events"), "type": "bar",
                          "data": [], "itemStyle": {"color": "#4b8cf5"},
                          "barMaxWidth": 32},
-                        {"name": "Detections", "type": "bar",
+                        {"name": t("analytics_detections"), "type": "bar",
                          "data": [], "itemStyle": {"color": "#f56262"},
                          "barMaxWidth": 32},
                     ],
@@ -117,7 +118,7 @@ def page_analytics() -> None:
 
         if is_teacher:
             with ui.card().classes("w-full"):
-                ui.label("Student Detection Hits (top 20)").classes(
+                ui.label(t("analytics_student_hits")).classes(
                     "text-sm font-semibold text-gray-600 dark:text-gray-400 mb-2")
                 bar_students = ui.echart({
                     "tooltip": {"trigger": "axis",
@@ -129,7 +130,7 @@ def page_analytics() -> None:
                                               "interval": 0}},
                     "yAxis":   {"type": "value",
                                 "axisLabel": {"color": "#888"}},
-                    "series":  [{"name": "Detections", "type": "bar",
+                    "series":  [{"name": t("analytics_detections"), "type": "bar",
                                  "data": [],
                                  "itemStyle": {"color": "#a78bfa"},
                                  "barMaxWidth": 40}],
@@ -179,7 +180,6 @@ def page_analytics() -> None:
 # ── Stat card helper ──────────────────────────────────────────────────────────
 
 def _stat_card(label: str, value: str, color: str) -> dict:
-    # Light-mode bg  /  dark-mode bg  |  light value colour  /  dark value colour
     themes = {
         "gray":  ("bg-gray-100  dark:bg-gray-800",
                   "text-gray-700  dark:text-gray-300"),

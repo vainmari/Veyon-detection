@@ -11,35 +11,29 @@ from nicegui import ui
 from app.core.auth import require_auth
 from app.db.database import list_audit_log, list_users
 from app.pages._nav import nav
+from app.translate import t
 
 _ACTION_COLORS = {
-    # Users
     "user.create":          "green",
     "user.delete":          "red",
     "user.password_change": "amber",
-    # Models
     "model.activate":       "blue",
     "model.import":         "cyan",
     "model.update":         "light-blue",
     "model.delete":         "red",
-    # Alerts
     "alert.rule":           "orange",
-    # Schedules
     "schedule.create":      "teal",
     "schedule.update":      "teal",
     "schedule.delete":      "red",
     "schedule.auto_start":  "green",
     "schedule.auto_stop":   "grey",
-    # Groups
     "group.create":         "purple",
     "group.update":         "purple",
     "group.delete":         "red",
     "group.assign":         "deep-purple",
     "group.import_veyon":   "indigo",
-    # Monitor (manual)
     "monitor.start":        "green",
     "monitor.stop":         "grey",
-    # Settings
     "settings.save":        "brown",
 }
 
@@ -59,46 +53,46 @@ def page_audit() -> None:
     nav(current)
 
     with ui.column().classes("w-full max-w-5xl mx-auto p-4 gap-4"):
-        ui.label("Audit Log").classes("text-xl font-bold")
+        ui.label(t("audit_title")).classes("text-xl font-bold")
 
         # ── Filters ───────────────────────────────────────────────────────────
         with ui.card().classes("w-full"):
             with ui.row().classes("gap-4 flex-wrap items-end"):
-                users = [{"label": "All users", "value": ""}] + [
+                users = [{"label": t("audit_all_users"), "value": ""}] + [
                     {"label": u["username"], "value": str(u["id"])}
                     for u in list_users()
                 ]
                 f_user = ui.select(
                     {u["value"]: u["label"] for u in users},
-                    value="", label="User",
+                    value="", label=t("audit_user"),
                 ).props("dense outlined").classes("w-44")
 
                 f_action = ui.input(
-                    label="Action filter",
-                    placeholder="e.g. user, model",
+                    label=t("audit_action_filter"),
+                    placeholder=t("audit_action_ph"),
                 ).props("dense outlined").classes("w-44")
 
                 f_limit = ui.number(
-                    "Max rows", value=200, min=10, max=2000,
+                    t("audit_max_rows"), value=200, min=10, max=2000,
                 ).props("dense outlined").classes("w-24")
 
-                ui.button("🔍 Filter", on_click=lambda: _load()).props(
+                ui.button(t("audit_filter_btn"), on_click=lambda: _load()).props(
                     "color=primary dense")
 
         # ── Table ─────────────────────────────────────────────────────────────
         cols = [
-            {"name": "created_at", "label": "Time",      "field": "created_at",
-             "sortable": True, "align": "left"},
-            {"name": "username",   "label": "User",      "field": "username",
-             "sortable": True, "align": "left"},
-            {"name": "action",     "label": "Action",    "field": "action",
-             "sortable": True, "align": "left"},
-            {"name": "entity",     "label": "Entity",    "field": "entity",
-             "sortable": True, "align": "left"},
-            {"name": "entity_id",  "label": "ID",        "field": "entity_id",
-             "sortable": True, "align": "center"},
-            {"name": "detail",     "label": "Detail",    "field": "detail",
-             "sortable": False, "align": "left"},
+            {"name": "created_at", "label": t("audit_col_time"),
+             "field": "created_at",  "sortable": True, "align": "left"},
+            {"name": "username",   "label": t("audit_col_user"),
+             "field": "username",    "sortable": True, "align": "left"},
+            {"name": "action",     "label": t("audit_col_action"),
+             "field": "action",      "sortable": True, "align": "left"},
+            {"name": "entity",     "label": t("audit_col_entity"),
+             "field": "entity",      "sortable": True, "align": "left"},
+            {"name": "entity_id",  "label": t("audit_col_id"),
+             "field": "entity_id",   "sortable": True, "align": "center"},
+            {"name": "detail",     "label": t("audit_col_detail"),
+             "field": "detail",      "sortable": False, "align": "left"},
         ]
         tbl = ui.table(columns=cols, rows=[], row_key="id").classes("w-full")
         tbl.props("dense flat bordered")
@@ -121,13 +115,13 @@ def page_audit() -> None:
                 action=action,
             )
             for r in rows:
-                r["username"]  = r.get("username") or "(system)"
+                r["username"]  = r.get("username") or t("audit_system")
                 r["entity"]    = r.get("entity")   or "—"
                 r["entity_id"] = r.get("entity_id") or "—"
                 r["detail"]    = r.get("detail")   or "—"
                 r["_color"]    = _badge_color(r["action"])
             tbl.rows = rows
             tbl.update()
-            count_lbl.set_text(f"{len(rows)} entries")
+            count_lbl.set_text(t("audit_entries").format(n=len(rows)))
 
         _load()

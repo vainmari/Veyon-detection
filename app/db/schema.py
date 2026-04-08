@@ -204,6 +204,16 @@ def _migrate(c: sqlite3.Connection) -> None:
             """)
         c.commit()
 
+    # 11. Expression index on LOWER(os_username) for case-insensitive auto-assign.
+    #     The plain idx_event_winuser index on os_username cannot be used by
+    #     WHERE LOWER(os_username) = LOWER(?), so we add a separate expression index.
+    if _table_exists(c, "detection_event"):
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_event_winuser_lower "
+            "ON detection_event(LOWER(os_username))"
+        )
+        c.commit()
+
     # 10b. Drop computer.group_id — superseded by computer_group_member.
     if _table_exists(c, "computer") and "group_id" in _cols(c, "computer"):
         c.executescript("""
@@ -354,8 +364,9 @@ def init_db() -> None:
         CREATE INDEX IF NOT EXISTS idx_event_computer  ON detection_event(computer_id);
         CREATE INDEX IF NOT EXISTS idx_event_user      ON detection_event(user_id);
         CREATE INDEX IF NOT EXISTS idx_event_model     ON detection_event(model_id);
-        CREATE INDEX IF NOT EXISTS idx_event_winuser   ON detection_event(os_username);
-        CREATE INDEX IF NOT EXISTS idx_event_time      ON detection_event(detected_at);
+        CREATE INDEX IF NOT EXISTS idx_event_winuser       ON detection_event(os_username);
+        CREATE INDEX IF NOT EXISTS idx_event_winuser_lower ON detection_event(LOWER(os_username));
+        CREATE INDEX IF NOT EXISTS idx_event_time          ON detection_event(detected_at);
         CREATE INDEX IF NOT EXISTS idx_event_comp_time ON detection_event(computer_id, detected_at);
         CREATE INDEX IF NOT EXISTS idx_event_user_time ON detection_event(user_id, detected_at);
 

@@ -27,6 +27,7 @@ from app.db.schema import (                                                # noq
 from app.db.users import (                                                 # noqa: F401
     list_roles, get_role_id,
     create_user, update_password, delete_user,
+    auto_assign_user_events, nullify_user_events,
     get_user_by_username, get_user_by_id,
     verify_password, list_users,
 )
@@ -62,5 +63,5 @@ from app.db.ml_models import (                                             # noq
 from app.db.analytics import (                                             # noqa: F401
     get_summary_stats, get_class_distribution,
     get_daily_detections, get_student_activity,
-    query_events,
+    count_events_for_user, count_query_events, query_events,
 )

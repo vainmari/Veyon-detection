@@ -20,6 +20,22 @@ from typing import Optional
 from app.db._core import _conn, _now
 
 
+def _insert_audit(
+    c,
+    action:    str,
+    user_id:   Optional[int] = None,
+    entity:    Optional[str] = None,
+    entity_id: Optional[int] = None,
+    detail:    Optional[str] = None,
+) -> None:
+    """Insert an audit row into an already-open connection without committing."""
+    c.execute(
+        "INSERT INTO audit_log (user_id, action, entity, entity_id, detail, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (user_id, action, entity, entity_id, detail, _now()),
+    )
+
+
 def log_action(
     action:    str,
     user_id:   Optional[int] = None,

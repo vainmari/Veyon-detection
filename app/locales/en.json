@@ -343,5 +343,14 @@
   "settings_alert_hint": "Set to 1 to alert on every detection.  Set to 2 or 3 to require repeated detections before notifying (reduces false positives).",
   "settings_save_btn": "💾  Save Settings",
   "settings_save_note": "Changes take effect the next time you press Start.",
-  "settings_saved": "✅ Settings saved — restart monitoring to apply"
+  "settings_saved": "✅ Settings saved — restart monitoring to apply",
+  "history_page_size": "Per page",
+  "history_page_info": "{first}–{last}{suffix}  (page {page})",
+  "users_deleting": "Deleting user and unlinking records...",
+  "users_created_linking": "User {uname} created. Linking historical records in background...",
+  "users_auto_assigned_done": "User {uname} ready — {n} historical record(s) linked.",
+  "users_deleting_bg": "Deleting {uname} — unlinking records in background...",
+  "history_page_info_total": "{first}–{last} of {total}  (page {page}/{pages})",
+  "snapshot_annotations": "Annotations",
+  "snapshot_fullscreen": "Full screen"
 }

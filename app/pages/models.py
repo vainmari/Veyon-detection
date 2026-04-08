@@ -43,6 +43,7 @@ from app.db.database import (
     update_ml_model,
 )
 from app.pages._nav import nav
+from app.translate import t
 from app.services.training_service import (
     BASE_MODELS,
     DATASETS_DIR,
@@ -67,7 +68,7 @@ def page_models() -> None:
         ui.separator()
         _model_library()
         ui.separator()
-        ui.label("Train New Model").classes("text-xl font-bold")
+        ui.label(t("models_train_title")).classes("text-xl font-bold")
         _training_wizard()
 
 
@@ -78,32 +79,28 @@ def _gpu_card() -> None:
 
     with ui.card().classes("w-full"):
         with ui.row().classes("items-center gap-3 flex-wrap"):
-            ui.label("PyTorch / GPU").classes("text-base font-semibold mr-2")
+            ui.label(t("models_gpu_title")).classes("text-base font-semibold mr-2")
 
             if not info.get("installed"):
-                ui.badge("PyTorch not found", color="red")
+                ui.badge(t("models_pytorch_not_found"), color="red")
                 return
 
             if info["cuda_ok"]:
                 ui.badge(f"GPU  {info['gpu_name']}", color="green")
                 ui.badge(f"CUDA {info['cuda_ver']}",  color="teal")
                 ui.badge(f"torch {info['torch_ver']}", color="gray")
-                ui.label("Training will use GPU ✅").classes(
+                ui.label(t("models_training_gpu")).classes(
                     "text-sm text-green-300 ml-2")
                 return
 
-            ui.badge("CPU only", color="orange")
+            ui.badge(t("models_cpu_only"), color="orange")
             ui.badge(f"torch {info['torch_ver']}", color="gray")
             if info.get("sys_cuda"):
                 ui.badge(f"NVIDIA CUDA {info['sys_cuda']} detected", color="blue")
 
         if not info["cuda_ok"]:
-            ui.markdown(
-                "GPU not available — training will be **slow** on CPU.  \n"
-                "The button below uninstalls the CPU build and installs the "
-                "CUDA build (~2.4 GB). The server keeps running during the "
-                "download and restarts automatically when done."
-            ).classes("text-sm text-gray-600 dark:text-gray-400 mt-2")
+            ui.markdown(t("models_gpu_slow")).classes(
+                "text-sm text-gray-600 dark:text-gray-400 mt-2")
 
             spinner     = ui.spinner("dots", size="sm").classes("mt-2")
             spinner.set_visibility(False)
@@ -112,13 +109,13 @@ def _gpu_card() -> None:
                 "w-full font-mono text-xs bg-gray-950 text-green-300 rounded mt-1"
             ).style("height:160px; display:none;")
             install_btn = ui.button(
-                "Install CUDA PyTorch", icon="download",
+                t("models_install_cuda"), icon="download",
             ).props("color=primary")
 
             def do_install() -> None:
                 install_btn.props("disable")
                 spinner.set_visibility(True)
-                dl_label.set_text("Starting…")
+                dl_label.set_text(t("models_starting"))
                 install_log.style("display:block;")
                 q: queue.Queue[str] = queue.Queue()
                 threading.Thread(
@@ -139,15 +136,14 @@ def _gpu_card() -> None:
                             parts = line.split("/")
                             fname = parts[-1].split("?")[0] if parts else ""
                             dl_label.set_text(
-                                f"⬇  Downloading {fname or 'torch CUDA'} "
-                                "— this takes several minutes…")
+                                t("models_downloading").format(
+                                    fname=fname or "torch CUDA"))
                         elif "installing" in low or "successfully installed" in low:
                             downloading[0] = False
-                            dl_label.set_text("Installing packages…")
+                            dl_label.set_text(t("models_installing"))
                         elif "✅" in line:
                             spinner.set_visibility(False)
-                            dl_label.set_text(
-                                "✅ Install complete — restarting in 3 s…")
+                            dl_label.set_text(t("models_install_done"))
                             drain_t.cancel()
                             def _restart() -> None:
                                 import time; time.sleep(3)
@@ -193,7 +189,7 @@ def _model_library() -> None:
     # ── Import dialog ─────────────────────────────────────────────────────────
     with ui.dialog() as import_dlg, \
          ui.card().classes("p-5 gap-3").style("min-width:560px; max-width:95vw;"):
-        ui.label("Import Model").classes("text-lg font-bold mb-1")
+        ui.label(t("models_import_title")).classes("text-lg font-bold mb-1")
 
         imp_msg  = ui.label("").classes("text-sm")
         imp_file = {"data": None, "name": ""}
@@ -202,7 +198,7 @@ def _model_library() -> None:
             "w-full bg-gray-50 border border-dashed border-gray-300 "
             "dark:bg-gray-800 dark:border-gray-500"
         ):
-            ui.label("Option A — Upload .onnx / .pt").classes(
+            ui.label(t("models_opt_upload")).classes(
                 "text-xs text-gray-500 dark:text-gray-400 mb-1")
 
             async def handle_model_upload(e: events.UploadEventArguments) -> None:
@@ -214,15 +210,15 @@ def _model_library() -> None:
                 imp_msg.classes(replace="text-sm text-green-400")
 
             ui.upload(
-                label="Drop file here",
+                label=t("models_drop_file"),
                 on_upload=handle_model_upload,
                 auto_upload=True,
             ).props("accept=.onnx,.pt flat").classes("w-full")
 
-        ui.label("— or —").classes("text-center text-gray-500 text-xs my-1")
+        ui.label(t("models_or")).classes("text-center text-gray-500 text-xs my-1")
 
         with ui.card().classes("w-full bg-gray-50 dark:bg-gray-800"):
-            ui.label("Option B — Server path").classes(
+            ui.label(t("models_opt_path")).classes(
                 "text-xs text-gray-500 dark:text-gray-400 mb-1")
             imp_path = ui.input(
                 placeholder="e.g. weights/ONNX_FP32.onnx"
@@ -231,19 +227,19 @@ def _model_library() -> None:
         ui.separator().classes("my-2")
 
         with ui.row().classes("w-full items-center gap-3 py-0"):
-            ui.label("Model name").classes("w-40 text-sm flex-shrink-0")
+            ui.label(t("models_field_name")).classes("w-40 text-sm flex-shrink-0")
             imp_name = ui.input(placeholder="e.g. MyDetector_v1"
                                 ).props("dense outlined").classes("flex-1")
         with ui.row().classes("w-full items-center gap-3 py-0"):
-            ui.label("Image size").classes("w-40 text-sm flex-shrink-0")
+            ui.label(t("models_field_imgsz")).classes("w-40 text-sm flex-shrink-0")
             imp_imgsz = ui.select([320, 480, 640, 1280], value=640
                                   ).props("dense outlined").classes("w-28")
         with ui.row().classes("w-full items-center gap-3 py-0"):
-            ui.label("Base / origin").classes("w-40 text-sm flex-shrink-0")
+            ui.label(t("models_field_base")).classes("w-40 text-sm flex-shrink-0")
             imp_base = ui.input(placeholder="e.g. yolo11n.pt or external"
                                 ).props("dense outlined").classes("flex-1")
         with ui.row().classes("w-full items-start gap-3 py-0"):
-            ui.label("Classes").classes("w-40 text-sm mt-2 flex-shrink-0")
+            ui.label(t("models_field_classes")).classes("w-40 text-sm mt-2 flex-shrink-0")
             with ui.column().classes("flex-1 gap-0"):
                 imp_classes = ui.textarea(
                     placeholder=(
@@ -252,10 +248,10 @@ def _model_library() -> None:
                         "names:\n  - DI\n  - Narsykle"
                     )
                 ).props("dense outlined rows=4").classes("w-full font-mono text-xs")
-                ui.label("Comma-separated or YAML names block"
-                         ).classes("text-xs text-gray-500 dark:text-gray-500")
+                ui.label(t("models_classes_hint")).classes(
+                    "text-xs text-gray-500 dark:text-gray-500")
 
-        ui.label("Metrics (optional)").classes("text-xs text-gray-400 mt-2")
+        ui.label(t("models_metrics_optional")).classes("text-xs text-gray-400 mt-2")
         with ui.row().classes("gap-3 flex-wrap"):
             imp_map50   = ui.number(label="mAP50",    value=0.0,
                                     min=0, max=1, step=0.001, format="%.3f"
@@ -284,17 +280,17 @@ def _model_library() -> None:
                         return
                     onnx_path = str(p)
                 else:
-                    imp_msg.set_text("❌  Provide a file or path.")
+                    imp_msg.set_text(t("models_err_no_file"))
                     imp_msg.classes(replace="text-sm text-red-400")
                     return
 
                 names = _parse_class_names(imp_classes.value)
                 if not names:
-                    imp_msg.set_text("❌  Enter at least one class name.")
+                    imp_msg.set_text(t("models_err_no_class"))
                     imp_msg.classes(replace="text-sm text-red-400")
                     return
                 if not imp_name.value.strip():
-                    imp_msg.set_text("❌  Enter a model name.")
+                    imp_msg.set_text(t("models_err_no_name"))
                     imp_msg.classes(replace="text-sm text-red-400")
                     return
 
@@ -327,14 +323,14 @@ def _model_library() -> None:
                                   f"nc={len(names)}, imgsz={imp_imgsz.value}")
                 import_dlg.close()
                 ui.notify(
-                    f"✅  '{imp_name.value.strip()}' imported "
-                    f"({len(names)} classes).",
+                    t("models_imported").format(
+                        name=imp_name.value.strip(), nc=len(names)),
                     type="positive")
                 _model_library.refresh()
 
-            ui.button("Import", icon="upload",
+            ui.button(t("models_import_do"), icon="upload",
                       on_click=do_import).props("color=primary")
-            ui.button("Cancel", on_click=import_dlg.close).props("flat")
+            ui.button(t("models_cancel"), on_click=import_dlg.close).props("flat")
 
     # ── Edit dialog ───────────────────────────────────────────────────────────
     with ui.dialog() as edit_dlg, \
@@ -343,22 +339,22 @@ def _model_library() -> None:
         edit_mid   = [None]
 
         with ui.row().classes("w-full items-center gap-3 py-0"):
-            ui.label("Model name").classes("w-40 text-sm flex-shrink-0")
+            ui.label(t("models_field_name")).classes("w-40 text-sm flex-shrink-0")
             edit_name = ui.input().props("dense outlined").classes("flex-1")
         with ui.row().classes("w-full items-center gap-3 py-0"):
-            ui.label("Image size").classes("w-40 text-sm flex-shrink-0")
+            ui.label(t("models_field_imgsz")).classes("w-40 text-sm flex-shrink-0")
             edit_imgsz = ui.select([320, 480, 640, 1280], value=640
                                    ).props("dense outlined").classes("w-28")
         with ui.row().classes("w-full items-start gap-3 py-0"):
-            ui.label("Classes").classes("w-40 text-sm mt-2 flex-shrink-0")
+            ui.label(t("models_field_classes")).classes("w-40 text-sm mt-2 flex-shrink-0")
             with ui.column().classes("flex-1 gap-0"):
                 edit_classes = ui.textarea().props(
                     "dense outlined rows=4"
                 ).classes("w-full font-mono text-xs")
-                ui.label("Comma-separated or YAML names block"
-                         ).classes("text-xs text-gray-500 dark:text-gray-500")
+                ui.label(t("models_classes_hint")).classes(
+                    "text-xs text-gray-500 dark:text-gray-500")
 
-        ui.label("Metrics").classes("text-xs text-gray-400 mt-2")
+        ui.label(t("models_metrics")).classes("text-xs text-gray-400 mt-2")
         with ui.row().classes("gap-3 flex-wrap"):
             edit_map50   = ui.number(label="mAP50",    min=0, max=1,
                                      step=0.001, format="%.3f"
@@ -380,10 +376,10 @@ def _model_library() -> None:
                     return
                 names = _parse_class_names(edit_classes.value)
                 if not names:
-                    ui.notify("Enter at least one class name.", type="negative")
+                    ui.notify(t("models_edit_err_class"), type="negative")
                     return
                 if not edit_name.value.strip():
-                    ui.notify("Model name cannot be empty.", type="negative")
+                    ui.notify(t("models_edit_err_name"), type="negative")
                     return
                 # Use the proper DB layer — no raw sqlite3 here
                 update_ml_model(
@@ -403,17 +399,17 @@ def _model_library() -> None:
                            entity="ml_model", entity_id=mid,
                            detail=f"name={edit_name.value.strip()}")
                 edit_dlg.close()
-                ui.notify("Model updated.", type="positive")
+                ui.notify(t("models_edit_saved"), type="positive")
                 _model_library.refresh()
 
-            ui.button("Save", icon="save", on_click=do_save).props("color=primary")
-            ui.button("Cancel", on_click=edit_dlg.close).props("flat")
+            ui.button(t("schedules_save"), icon="save", on_click=do_save).props("color=primary")
+            ui.button(t("models_cancel"), on_click=edit_dlg.close).props("flat")
 
     # ── Classes dialog ────────────────────────────────────────────────────────
     with ui.dialog() as cls_dlg, ui.card().classes("p-4 gap-3 min-w-80"):
         cls_dlg_title = ui.label("").classes("text-base font-bold mb-1")
         cls_dlg_body  = ui.column().classes("gap-1 w-full")
-        ui.button("Close", on_click=cls_dlg.close).props("flat dense")
+        ui.button(t("models_close"), on_click=cls_dlg.close).props("flat dense")
 
     # ── History dialog ────────────────────────────────────────────────────────
     with ui.dialog() as hist_dlg, \
@@ -421,62 +417,61 @@ def _model_library() -> None:
         hist_dlg_title = ui.label("").classes("text-base font-bold mb-1")
         hist_table     = ui.table(
             columns=[
-                {"name": "base",    "label": "Base model",
+                {"name": "base",    "label": t("models_hist_col_base"),
                  "field": "base_model", "sortable": True, "align": "left"},
-                {"name": "epochs",  "label": "Epochs",
+                {"name": "epochs",  "label": t("models_hist_col_epochs"),
                  "field": "epochs",    "sortable": True, "align": "center"},
-                {"name": "imgsz",   "label": "imgsz",
+                {"name": "imgsz",   "label": t("models_col_imgsz"),
                  "field": "imgsz",     "sortable": True, "align": "center"},
-                {"name": "batch",   "label": "Batch",
+                {"name": "batch",   "label": t("models_hist_col_batch"),
                  "field": "batch",     "sortable": True, "align": "center"},
-                {"name": "device",  "label": "Device",
+                {"name": "device",  "label": t("models_hist_col_device"),
                  "field": "device",    "sortable": True, "align": "center"},
-                {"name": "status",  "label": "Status",
+                {"name": "status",  "label": t("models_hist_col_status"),
                  "field": "status",    "sortable": True, "align": "center"},
-                {"name": "started", "label": "Started",
+                {"name": "started", "label": t("models_hist_col_started"),
                  "field": "started_at","sortable": True, "align": "left"},
-                {"name": "done",    "label": "Finished",
+                {"name": "done",    "label": t("models_hist_col_finished"),
                  "field": "finished_at","sortable": True, "align": "left"},
             ],
             rows=[], row_key="id",
         ).classes("w-full")
         hist_table.props("dense flat bordered")
-        ui.button("Close", on_click=hist_dlg.close).props("flat dense")
+        ui.button(t("models_close"), on_click=hist_dlg.close).props("flat dense")
 
     # ── Library card ──────────────────────────────────────────────────────────
     with ui.card().classes("w-full"):
         with ui.row().classes("items-center justify-between mb-2"):
-            ui.label("Model Library").classes("text-lg font-bold")
+            ui.label(t("models_library_title")).classes("text-lg font-bold")
             with ui.row().classes("gap-2"):
-                ui.button("Import Model", icon="upload",
+                ui.button(t("models_import_btn"), icon="upload",
                           on_click=import_dlg.open).props("flat color=primary dense")
                 ui.button(icon="refresh",
                           on_click=_model_library.refresh).props("flat round dense")
 
         models = list_models()
         if not models:
-            ui.label("No models yet. Train or import one.").classes(
-                "text-gray-500 text-sm")
+            ui.label(t("models_no_models")).classes("text-gray-500 text-sm")
             return
 
         cols = [
-            {"name": "name",     "label": "Name",
+            {"name": "name",     "label": t("models_col_name"),
              "field": "name",     "sortable": True, "align": "left"},
-            {"name": "base",     "label": "Base",
+            {"name": "base",     "label": t("models_col_base"),
              "field": "base_model","sortable": True, "align": "left"},
-            {"name": "classes",  "label": "Classes",
+            {"name": "classes",  "label": t("models_col_classes"),
              "field": "nc",       "sortable": True, "align": "center"},
-            {"name": "imgsz",    "label": "imgsz",
+            {"name": "imgsz",    "label": t("models_col_imgsz"),
              "field": "imgsz",    "sortable": True, "align": "center"},
-            {"name": "map50",    "label": "mAP50",
+            {"name": "map50",    "label": t("models_col_map50"),
              "field": "map50",    "sortable": True, "align": "center"},
-            {"name": "map50_95", "label": "mAP50-95",
+            {"name": "map50_95", "label": t("models_col_map5095"),
              "field": "map50_95", "sortable": True, "align": "center"},
-            {"name": "status",   "label": "Status",
+            {"name": "status",   "label": t("models_col_status"),
              "field": "status",   "sortable": True, "align": "center"},
-            {"name": "active",   "label": "Active",
+            {"name": "active",   "label": t("models_col_active"),
              "field": "is_active","align": "center"},
-            {"name": "created",  "label": "Trained",
+            {"name": "created",  "label": t("models_col_trained"),
              "field": "created_at","sortable": True, "align": "left"},
             {"name": "actions",  "label": "",
              "field": "id",       "align": "right"},
@@ -534,8 +529,8 @@ def _model_library() -> None:
             apply_active_model(int(mid))
             m = get_model_by_id(int(mid))
             ui.notify(
-                f"✅  '{m['name'] if m else mid}' is now active — "
-                "restart monitoring to apply.", type="positive")
+                t("models_activated").format(name=m["name"] if m else mid),
+                type="positive")
             _model_library.refresh()
 
         def on_edit_model(e) -> None:
@@ -561,7 +556,8 @@ def _model_library() -> None:
             row = e.args
             m = get_model_by_id(int(row["id"]))
             names = m.get("class_names", []) if m else []
-            cls_dlg_title.set_text(f"{row.get('name', '')} — {len(names)} classes")
+            cls_dlg_title.set_text(
+                t("models_classes_count").format(name=row.get("name", ""), n=len(names)))
             cls_dlg_body.clear()
             with cls_dlg_body:
                 from app.core.colors import class_hex
@@ -576,7 +572,8 @@ def _model_library() -> None:
         def on_show_history(e) -> None:
             row = e.args
             mid = row.get("id")
-            hist_dlg_title.set_text(f"Training config — {row.get('name', '')}")
+            hist_dlg_title.set_text(
+                t("models_hist_title").format(name=row.get("name", "")))
             m = get_model_by_id(int(mid)) if mid else None
             hist_table.rows = [{
                 "base_model":  m.get("base_model")  or "—",
@@ -604,9 +601,8 @@ def _model_library() -> None:
             log_action("model.delete", user_id=_u["id"] if _u else None,
                        entity="ml_model", entity_id=mid,
                        detail=f"name={m['name'] if m else '?'}")
-            ui.notify("Model deleted.", type="warning")
+            ui.notify(t("models_deleted"), type="warning")
             if was_active:
-                # Promote the next ready model alphabetically
                 remaining = [
                     r for r in list_models()
                     if r["id"] != mid and r.get("status") == "ready"
@@ -616,14 +612,11 @@ def _model_library() -> None:
                     set_active_model(next_m["id"])
                     apply_active_model(next_m["id"])
                     ui.notify(
-                        f"'{next_m['name']}' is now the active model.",
+                        t("models_promoted").format(name=next_m["name"]),
                         type="info",
                     )
                 else:
-                    ui.notify(
-                        "No other ready model available — activate one manually.",
-                        type="warning",
-                    )
+                    ui.notify(t("models_no_ready"), type="warning")
             _model_library.refresh()
 
         tbl.on("set_active",   on_set_active)
@@ -661,13 +654,8 @@ def _training_wizard() -> None:
 
 def _step_upload(ws: dict, refresh) -> None:
     with ui.card().classes("w-full max-w-2xl"):
-        ui.label("Step 1 — Upload Dataset").classes("text-base font-semibold mb-1")
-        ui.markdown(
-            "Upload a **YOLO-format** ZIP (`data.yaml` + `images/` + `labels/`) "
-            "or a **COCO-format** ZIP (`annotations/*.json` + image folders).  \n"
-            "Missing `val` or `test` splits are created automatically. "
-            "COCO annotations are converted to YOLO format automatically."
-        ).classes("text-sm text-gray-400 mb-3")
+        ui.label(t("models_step1_title")).classes("text-base font-semibold mb-1")
+        ui.markdown(t("models_step1_intro")).classes("text-sm text-gray-400 mb-3")
 
         msg_lbl    = ui.label("").classes("text-sm")
         upload_ref = {"data": None, "name": ""}
@@ -676,7 +664,8 @@ def _step_upload(ws: dict, refresh) -> None:
             "w-full bg-gray-50 border border-dashed border-gray-300 "
             "dark:bg-gray-800 dark:border-gray-500"
         ):
-            ui.label("Option A — Upload ZIP").classes("text-xs text-gray-500 dark:text-gray-400 mb-2")
+            ui.label(t("models_step1_opt_upload")).classes(
+                "text-xs text-gray-500 dark:text-gray-400 mb-2")
 
             async def handle_upload(e: events.UploadEventArguments) -> None:
                 raw  = await e.file.read()
@@ -687,22 +676,22 @@ def _step_upload(ws: dict, refresh) -> None:
                 msg_lbl.classes(replace="text-sm text-green-400")
 
             ui.upload(
-                label="Drop dataset ZIP here",
+                label=t("models_step1_drop"),
                 on_upload=handle_upload,
                 auto_upload=True,
             ).props("accept=.zip flat").classes("w-full")
 
-        ui.label("— or —").classes("text-center text-gray-500 text-sm my-1")
+        ui.label(t("models_or")).classes("text-center text-gray-500 text-sm my-1")
 
         with ui.card().classes("w-full bg-gray-50 dark:bg-gray-800"):
-            ui.label("Option B — Local server path to extracted dataset"
-                     ).classes("text-xs text-gray-500 dark:text-gray-400 mb-1")
+            ui.label(t("models_step1_opt_path")).classes(
+                "text-xs text-gray-500 dark:text-gray-400 mb-1")
             path_input = ui.input(
                 placeholder="e.g. C:/datasets/my_dataset"
             ).props("dense outlined").classes("w-full")
 
         async def do_analyze() -> None:
-            msg_lbl.set_text("Analysing dataset…")
+            msg_lbl.set_text(t("models_step1_analysing"))
             msg_lbl.classes(replace="text-sm text-yellow-400")
             if upload_ref["data"]:
                 ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -717,7 +706,7 @@ def _step_upload(ws: dict, refresh) -> None:
                 result = await asyncio.get_event_loop().run_in_executor(
                     None, analyze_dataset, ds_dir)
             else:
-                msg_lbl.set_text("Provide a ZIP upload or a local path.")
+                msg_lbl.set_text(t("models_step1_no_input"))
                 msg_lbl.classes(replace="text-sm text-red-400")
                 return
             if not result["ok"]:
@@ -729,7 +718,7 @@ def _step_upload(ws: dict, refresh) -> None:
             ws["step"]        = "analysis"
             refresh.refresh()
 
-        ui.button("Analyse Dataset →", on_click=do_analyze).props(
+        ui.button(t("models_step1_analyse"), on_click=do_analyze).props(
             "color=primary").classes("mt-2")
 
 
@@ -739,45 +728,46 @@ def _step_analysis(ws: dict, refresh) -> None:
     a = ws["analysis"]
 
     with ui.column().classes("w-full gap-4"):
-        ui.label("Step 2 — Review Dataset & Configure Training").classes(
-            "text-base font-semibold")
+        ui.label(t("models_step2_title")).classes("text-base font-semibold")
 
         with ui.row().classes("gap-4 flex-wrap"):
             fmt = a.get("source_format", "yolo").upper()
             fmt_color = "orange" if fmt == "COCO" else "blue"
             for label, val in [
-                ("Total images",  str(a["total_images"])),
-                ("Classes",       str(a["nc"])),
-                ("Splits found",  ", ".join(a["splits"].keys()) or "—"),
+                (t("models_step2_total_images"), str(a["total_images"])),
+                (t("models_step2_classes"),      str(a["nc"])),
+                (t("models_step2_splits_found"), ", ".join(a["splits"].keys()) or "—"),
             ]:
                 with ui.card().classes("bg-gray-800 px-4 py-3 min-w-36"):
                     ui.label(label).classes("text-xs text-gray-400")
                     ui.label(val).classes("text-xl font-bold text-blue-300")
             with ui.card().classes("bg-gray-800 px-4 py-3 min-w-36"):
-                ui.label("Source format").classes("text-xs text-gray-400")
+                ui.label(t("models_step2_src_format")).classes("text-xs text-gray-400")
                 ui.badge(fmt, color=fmt_color).classes("text-sm mt-1")
             if fmt == "COCO":
                 with ui.card().classes(
                     "bg-orange-50 border border-orange-300 px-4 py-3 "
                     "dark:bg-orange-950 dark:border-orange-700"
                 ):
-                    ui.label("COCO → YOLO").classes(
+                    ui.label(t("models_step2_coco_label")).classes(
                         "text-xs text-orange-700 dark:text-orange-300 font-semibold")
-                    ui.label("Converted automatically").classes(
+                    ui.label(t("models_step2_coco_converted")).classes(
                         "text-xs text-orange-600 dark:text-orange-200")
 
         with ui.card().classes("w-full"):
-            ui.label("Splits").classes("text-sm font-semibold text-gray-600 dark:text-gray-400 mb-2")
+            ui.label(t("models_step2_splits")).classes(
+                "text-sm font-semibold text-gray-600 dark:text-gray-400 mb-2")
             with ui.row().classes("gap-4 flex-wrap"):
                 for split, info in a["splits"].items():
                     with ui.card().classes("bg-gray-800 px-3 py-2 min-w-28"):
                         ui.label(split).classes("text-xs text-gray-400 uppercase")
-                        ui.label(f"{info['images']} images").classes(
+                        ui.label(t("models_step2_images").format(
+                            n=info["images"])).classes(
                             "text-sm font-mono text-green-300")
 
         cc = a["class_counts"]
         with ui.card().classes("w-full"):
-            ui.label("Class Distribution").classes(
+            ui.label(t("models_step2_class_dist")).classes(
                 "text-sm font-semibold text-gray-600 dark:text-gray-400 mb-2")
             ui.echart({
                 "tooltip": {"trigger": "axis",
@@ -803,39 +793,39 @@ def _step_analysis(ws: dict, refresh) -> None:
                 "w-full bg-yellow-50 border border-yellow-300 "
                 "dark:bg-yellow-950 dark:border-yellow-700"
             ):
-                ui.label("Warnings").classes(
+                ui.label(t("models_step2_warnings")).classes(
                     "text-sm font-semibold text-yellow-700 dark:text-yellow-300 mb-1")
                 for w in a["warnings"]:
                     ui.label(w).classes("text-sm text-yellow-800 dark:text-yellow-200")
 
         with ui.card().classes("w-full max-w-xl"):
-            ui.label("Training Configuration").classes(
+            ui.label(t("models_step2_train_cfg")).classes(
                 "text-sm font-semibold text-gray-600 dark:text-gray-400 mb-3")
 
             with ui.row().classes("w-full items-center gap-4 py-1"):
-                ui.label("Run name").classes("w-44 text-sm")
+                ui.label(t("models_step2_run_name")).classes("w-44 text-sm")
                 f_name = ui.input(
                     value=f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
                 ).props("dense outlined").classes("flex-1")
             with ui.row().classes("w-full items-center gap-4 py-1"):
-                ui.label("Base model").classes("w-44 text-sm")
+                ui.label(t("models_step2_base_model")).classes("w-44 text-sm")
                 f_base = ui.select(BASE_MODELS, value=BASE_MODELS[0]).props(
                     "dense outlined").classes("w-44")
             with ui.row().classes("w-full items-center gap-4 py-1"):
-                ui.label("Epochs").classes("w-44 text-sm")
+                ui.label(t("models_step2_epochs")).classes("w-44 text-sm")
                 f_epochs = ui.number(value=100, min=1, max=1000).props(
                     "dense outlined").classes("w-32")
             with ui.row().classes("w-full items-center gap-4 py-1"):
-                ui.label("Image size").classes("w-44 text-sm")
+                ui.label(t("models_step2_image_size")).classes("w-44 text-sm")
                 f_imgsz = ui.select([320, 480, 640, 1280], value=640).props(
                     "dense outlined").classes("w-32")
             with ui.row().classes("w-full items-center gap-4 py-1"):
-                ui.label("Batch size  (-1 = auto)").classes("w-44 text-sm")
+                ui.label(t("models_step2_batch")).classes("w-44 text-sm")
                 f_batch = ui.number(value=16, min=-1, max=256).props(
                     "dense outlined").classes("w-32")
 
         with ui.row().classes("gap-3"):
-            ui.button("← Back", on_click=lambda: (
+            ui.button(t("models_step2_back"), on_click=lambda: (
                 ws.__setitem__("step", "upload"), refresh.refresh()
             )).props("flat")
 
@@ -860,7 +850,7 @@ def _step_analysis(ws: dict, refresh) -> None:
                 ws["step"] = "training"
                 refresh.refresh()
 
-            ui.button("Start Training ▶", on_click=do_start).props("color=green")
+            ui.button(t("models_step2_start"), on_click=do_start).props("color=green")
 
 
 # ── Step 3: Live training ─────────────────────────────────────────────────────
@@ -869,22 +859,22 @@ def _step_training(ws: dict, refresh) -> None:
     worker: TrainingWorker = state.training_worker
 
     with ui.column().classes("w-full gap-4"):
-        ui.label("Step 3 — Training in Progress").classes(
-            "text-base font-semibold")
+        ui.label(t("models_step3_title")).classes("text-base font-semibold")
 
         with ui.card().classes("w-full"):
             status_lbl = ui.label("").classes(
                 "text-sm font-mono text-yellow-300 mb-1")
             epoch_lbl  = ui.label("").classes("text-xs text-gray-500 dark:text-gray-400 mb-1")
-            ui.label("Epoch progress").classes("text-xs text-gray-500 dark:text-gray-500 mb-0")
+            ui.label(t("models_step3_epoch_prog")).classes(
+                "text-xs text-gray-500 dark:text-gray-500 mb-0")
             prog_epoch = ui.linear_progress(value=0).props("color=green")
-            ui.label("Batch progress (current epoch)").classes(
+            ui.label(t("models_step3_batch_prog")).classes(
                 "text-xs text-gray-500 mt-2 mb-0")
             prog_batch = ui.linear_progress(value=0).props("color=blue")
             batch_lbl  = ui.label("").classes("text-xs text-gray-500 dark:text-gray-500 mt-0")
 
         with ui.card().classes("w-full"):
-            ui.label("Validation mAP (after each epoch)").classes(
+            ui.label(t("models_step3_val_map")).classes(
                 "text-sm font-semibold text-gray-600 dark:text-gray-400 mb-1")
             map_chart = ui.echart({
                 "tooltip": {"trigger": "axis"},
@@ -908,7 +898,7 @@ def _step_training(ws: dict, refresh) -> None:
             }).classes("w-full").style("height:240px")
 
         with ui.card().classes("w-full"):
-            ui.label("Training Loss (per epoch)").classes(
+            ui.label(t("models_step3_train_loss")).classes(
                 "text-sm font-semibold text-gray-600 dark:text-gray-400 mb-1")
             loss_chart = ui.echart({
                 "tooltip": {"trigger": "axis"},
@@ -934,7 +924,7 @@ def _step_training(ws: dict, refresh) -> None:
                 ],
             }).classes("w-full").style("height:240px")
 
-        ui.button("Cancel", on_click=lambda: _cancel(ws, refresh)).props(
+        ui.button(t("models_step3_cancel"), on_click=lambda: _cancel(ws, refresh)).props(
             "flat color=red")
 
     epochs_x = []
@@ -1025,7 +1015,8 @@ def _step_training(ws: dict, refresh) -> None:
                 timer.cancel()
                 return
             elif t == "cancelled":
-                status_lbl.set_text("Training cancelled.")
+                from app.translate import t as _t
+                status_lbl.set_text(_t("models_step3_cancelled"))
                 timer.cancel()
                 return
         if changed:
@@ -1050,20 +1041,20 @@ def _step_done(ws: dict, refresh) -> None:
 
     with ui.card().classes("w-full max-w-xl"):
         ui.icon("check_circle").classes("text-green-400 text-5xl mb-2")
-        ui.label("Training Complete!").classes("text-xl font-bold text-green-300")
+        ui.label(t("models_step4_title")).classes("text-xl font-bold text-green-300")
 
         if model:
             with ui.column().classes("gap-1 mt-2"):
                 for label, val in [
-                    ("Model name",  model["name"]),
-                    ("Base model",  model.get("base_model") or "—"),
-                    ("Classes",     str(model["nc"])),
-                    ("imgsz",       str(model.get("imgsz") or 640)),
-                    ("mAP50",       f"{model['map50']:.3f}"),
-                    ("mAP50-95",    f"{model['map50_95']:.3f}"),
-                    ("Precision",   f"{model['precision']:.3f}"),
-                    ("Recall",      f"{model['recall']:.3f}"),
-                    ("ONNX path",   model.get("onnx_path") or "—"),
+                    (t("models_step4_model_name"), model["name"]),
+                    (t("models_step4_base"),        model.get("base_model") or "—"),
+                    (t("models_step4_classes"),     str(model["nc"])),
+                    (t("models_col_imgsz"),         str(model.get("imgsz") or 640)),
+                    (t("models_col_map50"),         f"{model['map50']:.3f}"),
+                    (t("models_col_map5095"),       f"{model['map50_95']:.3f}"),
+                    ("Precision",                   f"{model['precision']:.3f}"),
+                    ("Recall",                      f"{model['recall']:.3f}"),
+                    (t("models_step4_onnx"),        model.get("onnx_path") or "—"),
                 ]:
                     with ui.row().classes("gap-3"):
                         ui.label(f"{label}:").classes("text-gray-400 text-sm w-28")
@@ -1074,15 +1065,13 @@ def _step_done(ws: dict, refresh) -> None:
                 def activate() -> None:
                     set_active_model(model["id"])
                     apply_active_model(model["id"])
-                    ui.notify(
-                        "Model set as active — restart monitoring to apply.",
-                        type="positive")
+                    ui.notify(t("models_step4_activated"), type="positive")
                     _model_library.refresh()
-                ui.button("Set as Active Model",
+                ui.button(t("models_step4_activate"),
                           on_click=activate).props("color=green")
 
             def new_run() -> None:
                 state.training_worker = None
                 ws.update({"step": "upload", "analysis": None, "model_id": None})
                 refresh.refresh()
-            ui.button("Train Another Model", on_click=new_run).props("flat")
+            ui.button(t("models_step4_another"), on_click=new_run).props("flat")

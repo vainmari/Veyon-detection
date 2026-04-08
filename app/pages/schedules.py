@@ -21,16 +21,26 @@ from app.db.database import (
     update_schedule,
 )
 from app.pages._nav import nav
+from app.translate import t
 
-_DAY_LABELS = {
-    "0": "Mon", "1": "Tue", "2": "Wed",
-    "3": "Thu", "4": "Fri", "5": "Sat", "6": "Sun",
-}
-_ALL_DAYS = list(_DAY_LABELS.keys())
+_ALL_DAYS = ["0", "1", "2", "3", "4", "5", "6"]
+
+
+def _day_labels() -> dict[str, str]:
+    return {
+        "0": t("schedules_day_mon"),
+        "1": t("schedules_day_tue"),
+        "2": t("schedules_day_wed"),
+        "3": t("schedules_day_thu"),
+        "4": t("schedules_day_fri"),
+        "5": t("schedules_day_sat"),
+        "6": t("schedules_day_sun"),
+    }
 
 
 def _fmt_days(days_str: str) -> str:
-    return ", ".join(_DAY_LABELS.get(d, d) for d in days_str.split(",") if d)
+    labels = _day_labels()
+    return ", ".join(labels.get(d, d) for d in days_str.split(",") if d)
 
 
 @ui.page("/schedules")
@@ -41,20 +51,17 @@ def page_schedules() -> None:
     nav(current)
 
     with ui.column().classes("w-full max-w-4xl mx-auto p-4 gap-4"):
-        ui.label("Monitoring Schedules").classes("text-xl font-bold")
+        ui.label(t("schedules_title")).classes("text-xl font-bold")
 
-        ui.markdown(
-            "Set up weekly monitoring windows per computer group.  \n"
-            "Each schedule defines which **days** and **time range** a group should be monitored."
-        ).classes("text-sm text-gray-500 dark:text-gray-400")
+        ui.markdown(t("schedules_intro")).classes(
+            "text-sm text-gray-500 dark:text-gray-400")
 
         groups = list_groups()
         if not groups:
             with ui.card().classes("w-full bg-yellow-50 dark:bg-yellow-950 "
                                    "border border-yellow-300 dark:border-yellow-700"):
-                ui.label(
-                    "No computer groups exist yet — create groups first on the Groups page."
-                ).classes("text-sm text-yellow-800 dark:text-yellow-200")
+                ui.label(t("schedules_no_groups")).classes(
+                    "text-sm text-yellow-800 dark:text-yellow-200")
 
         # ── Create / Edit dialog ──────────────────────────────────────────────
         with ui.dialog() as dlg, ui.card().classes("p-5 gap-3").style(
@@ -64,52 +71,54 @@ def page_schedules() -> None:
             dlg_id    = [None]
 
             with ui.row().classes("w-full items-center gap-3"):
-                ui.label("Name").classes("w-36 text-sm")
+                ui.label(t("schedules_field_name")).classes("w-36 text-sm")
                 dlg_name = ui.input().props("dense outlined").classes("flex-1")
 
             with ui.row().classes("w-full items-center gap-3"):
-                ui.label("Group").classes("w-36 text-sm")
+                ui.label(t("schedules_field_group")).classes("w-36 text-sm")
                 group_opts = {str(g["id"]): g["name"] for g in groups}
                 dlg_group = ui.select(
                     group_opts,
                     value=str(groups[0]["id"]) if groups else None,
                 ).props("dense outlined").classes("flex-1")
 
-            ui.label("Days of week").classes("text-sm text-gray-500 dark:text-gray-400 mt-1")
+            ui.label(t("schedules_days_label")).classes(
+                "text-sm text-gray-500 dark:text-gray-400 mt-1")
+            day_labels = _day_labels()
             day_checks: dict[str, ui.checkbox] = {}
             with ui.row().classes("gap-3 flex-wrap"):
-                for k, label in _DAY_LABELS.items():
-                    day_checks[k] = ui.checkbox(label, value=(int(k) < 5))
+                for k in _ALL_DAYS:
+                    day_checks[k] = ui.checkbox(day_labels[k], value=(int(k) < 5))
 
             with ui.row().classes("w-full items-center gap-3 mt-1"):
-                ui.label("Start time").classes("w-36 text-sm")
+                ui.label(t("schedules_start_time")).classes("w-36 text-sm")
                 dlg_start = ui.input(value="08:00").props(
                     "dense outlined mask=##:## placeholder=HH:MM"
                 ).classes("w-28")
 
             with ui.row().classes("w-full items-center gap-3"):
-                ui.label("End time").classes("w-36 text-sm")
+                ui.label(t("schedules_end_time")).classes("w-36 text-sm")
                 dlg_end = ui.input(value="14:00").props(
                     "dense outlined mask=##:## placeholder=HH:MM"
                 ).classes("w-28")
 
-            dlg_active = ui.checkbox("Active", value=True)
+            dlg_active = ui.checkbox(t("schedules_active"), value=True)
 
             with ui.row().classes("gap-2 mt-2"):
                 def _save() -> None:
                     name = dlg_name.value.strip()
                     if not name:
-                        ui.notify("Name is required.", type="negative")
+                        ui.notify(t("schedules_err_name"), type="negative")
                         return
                     selected_days = ",".join(k for k in _ALL_DAYS if day_checks[k].value)
                     if not selected_days:
-                        ui.notify("Select at least one day.", type="negative")
+                        ui.notify(t("schedules_err_days"), type="negative")
                         return
                     if not dlg_start.value or not dlg_end.value:
-                        ui.notify("Set both start and end times.", type="negative")
+                        ui.notify(t("schedules_err_times"), type="negative")
                         return
                     if dlg_start.value >= dlg_end.value:
-                        ui.notify("End time must be after start time.", type="negative")
+                        ui.notify(t("schedules_err_order"), type="negative")
                         return
                     gid = int(dlg_group.value) if dlg_group.value else None
                     conflicts = find_overlapping_schedules(
@@ -120,13 +129,13 @@ def page_schedules() -> None:
                     if conflicts:
                         names = ", ".join(f"'{c['name']}'" for c in conflicts)
                         ui.notify(
-                            f"Time conflict with {names}. "
-                            "Overlapping schedules are not allowed.",
+                            t("schedules_err_conflict").format(names=names),
                             type="negative",
                         )
                         return
+                    labels = _day_labels()
                     day_str = ", ".join(
-                        _DAY_LABELS[d] for d in selected_days.split(",") if d
+                        labels[d] for d in selected_days.split(",") if d
                     )
                     detail = (f"name={name}, days={day_str}, "
                               f"{dlg_start.value}–{dlg_end.value}")
@@ -142,7 +151,7 @@ def page_schedules() -> None:
                         log_action("schedule.create", user_id=current["id"],
                                    entity="schedule", entity_id=sid,
                                    detail=detail)
-                        ui.notify(f"Schedule '{name}' created.", type="positive")
+                        ui.notify(t("schedules_created").format(name=name), type="positive")
                     else:
                         update_schedule(
                             dlg_id[0], name, selected_days,
@@ -152,16 +161,16 @@ def page_schedules() -> None:
                         log_action("schedule.update", user_id=current["id"],
                                    entity="schedule", entity_id=dlg_id[0],
                                    detail=detail)
-                        ui.notify(f"Schedule '{name}' updated.", type="positive")
+                        ui.notify(t("schedules_updated").format(name=name), type="positive")
                     dlg.close()
                     _schedules_panel.refresh()
 
-                ui.button("Save", icon="save", on_click=_save).props("color=primary")
-                ui.button("Cancel", on_click=dlg.close).props("flat")
+                ui.button(t("schedules_save"), icon="save", on_click=_save).props("color=primary")
+                ui.button(t("schedules_cancel"), on_click=dlg.close).props("flat")
 
         def _open_create() -> None:
             dlg_id[0] = None
-            dlg_title.set_text("New Schedule")
+            dlg_title.set_text(t("schedules_new"))
             dlg_name.set_value("")
             for k in _ALL_DAYS:
                 day_checks[k].set_value(int(k) < 5)
@@ -172,7 +181,7 @@ def page_schedules() -> None:
 
         def _open_edit(s: dict) -> None:
             dlg_id[0] = s["id"]
-            dlg_title.set_text(f"Edit — {s['name']}")
+            dlg_title.set_text(t("schedules_edit").format(name=s["name"]))
             dlg_name.set_value(s["name"])
             dlg_group.set_value(str(s["group_id"]) if s.get("group_id") else None)
             active_days = s.get("days_of_week", "").split(",")
@@ -186,7 +195,7 @@ def page_schedules() -> None:
         # ── Schedules panel ───────────────────────────────────────────────────
         with ui.row().classes("items-center justify-between w-full"):
             ui.label("").classes("flex-1")
-            ui.button("+ New Schedule", on_click=_open_create).props(
+            ui.button(t("schedules_btn_new"), on_click=_open_create).props(
                 "color=primary dense")
 
         @ui.refreshable
@@ -194,24 +203,24 @@ def page_schedules() -> None:
             schedules = list_schedules()
             if not schedules:
                 with ui.card().classes("w-full"):
-                    ui.label("No schedules yet.").classes("text-sm text-gray-500")
+                    ui.label(t("schedules_none")).classes("text-sm text-gray-500")
                 return
 
             cols = [
-                {"name": "name",    "label": "Name",      "field": "name",
-                 "sortable": True,  "align": "left"},
-                {"name": "group",   "label": "Group",     "field": "group_name",
-                 "sortable": True,  "align": "left"},
-                {"name": "days",    "label": "Days",      "field": "days_of_week",
-                 "sortable": False, "align": "left"},
-                {"name": "start",   "label": "Start",     "field": "start_time",
-                 "sortable": True,  "align": "center"},
-                {"name": "end",     "label": "End",       "field": "end_time",
-                 "sortable": True,  "align": "center"},
-                {"name": "active",  "label": "Active",    "field": "is_active",
-                 "sortable": True,  "align": "center"},
-                {"name": "actions", "label": "",          "field": "id",
-                 "align": "right"},
+                {"name": "name",    "label": t("schedules_col_name"),
+                 "field": "name",       "sortable": True,  "align": "left"},
+                {"name": "group",   "label": t("schedules_col_group"),
+                 "field": "group_name", "sortable": True,  "align": "left"},
+                {"name": "days",    "label": t("schedules_col_days"),
+                 "field": "days_of_week","sortable": False, "align": "left"},
+                {"name": "start",   "label": t("schedules_col_start"),
+                 "field": "start_time", "sortable": True,  "align": "center"},
+                {"name": "end",     "label": t("schedules_col_end"),
+                 "field": "end_time",   "sortable": True,  "align": "center"},
+                {"name": "active",  "label": t("schedules_col_active"),
+                 "field": "is_active",  "sortable": True,  "align": "center"},
+                {"name": "actions", "label": "",
+                 "field": "id",         "align": "right"},
             ]
             rows = [
                 {**s,
@@ -250,7 +259,7 @@ def page_schedules() -> None:
                     log_action("schedule.delete", user_id=current["id"],
                                entity="schedule", entity_id=sid_int,
                                detail=f"name={s['name'] if s else '?'}")
-                    ui.notify("Schedule deleted.", type="warning")
+                    ui.notify(t("schedules_deleted"), type="warning")
                     _schedules_panel.refresh()
 
             tbl.on("edit", on_edit)

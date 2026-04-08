@@ -20,6 +20,7 @@ from app.db.database import (
 )
 from app.pages._nav import nav
 from app.pages._snapshot import make_snapshot_dialogs
+from app.translate import t
 
 
 @ui.page("/history")
@@ -34,7 +35,7 @@ def page_history() -> None:
 
     with ui.column().classes("w-full p-4 gap-4"):
         ui.label(
-            "Detection History" if is_teacher else "My Detection History"
+            t("history_title") if is_teacher else t("history_my_title")
         ).classes("text-xl font-bold")
 
         # ── Filter bar ────────────────────────────────────────────────────────
@@ -42,59 +43,59 @@ def page_history() -> None:
             with ui.row().classes("gap-4 flex-wrap items-end"):
 
                 if is_teacher:
-                    computers = [{"label": "All computers", "value": ""}] + [
+                    computers = [{"label": t("history_all_computers"), "value": ""}] + [
                         {"label": c["name"], "value": str(c["id"])}
                         for c in list_computers()
                     ]
                     f_computer = ui.select(
                         {c["value"]: c["label"] for c in computers},
-                        value="", label="Computer",
+                        value="", label=t("history_computer"),
                     ).props("dense outlined").classes("w-44")
 
-                    students = [{"label": "All students", "value": ""}] + [
+                    students = [{"label": t("history_all_students"), "value": ""}] + [
                         {"label": u["username"], "value": str(u["id"])}
                         for u in list_users() if u["role"] == "student"
                     ]
                     f_student = ui.select(
                         {s["value"]: s["label"] for s in students},
-                        value="", label="Student",
+                        value="", label=t("history_student"),
                     ).props("dense outlined").classes("w-44")
 
-                classes = [{"label": "All classes", "value": ""}] + [
+                classes = [{"label": t("history_all_classes"), "value": ""}] + [
                     {"label": c["name"], "value": c["name"]}
                     for c in list_classes()
                 ]
                 f_class = ui.select(
                     {c["value"]: c["label"] for c in classes},
-                    value="", label="Class",
+                    value="", label=t("history_class"),
                 ).props("dense outlined").classes("w-44")
 
-                f_only_hits = ui.checkbox("Detections only", value=False)
+                f_only_hits = ui.checkbox(t("history_detections_only"), value=False)
 
                 f_lim = ui.number(
-                    "Max rows", value=200, min=10, max=5000,
+                    t("history_max_rows"), value=200, min=10, max=5000,
                 ).props("dense outlined").classes("w-24")
 
-                ui.button("🔍 Search", on_click=lambda: _load()).props("color=primary")
+                ui.button(t("history_search"), on_click=lambda: _load()).props("color=primary")
 
         # ── Table ─────────────────────────────────────────────────────────────
         base_cols = [
-            {"name": "detected_at",    "label": "Time",
+            {"name": "detected_at",    "label": t("history_col_time"),
              "field": "detected_at",   "sortable": True,  "align": "left"},
-            {"name": "had_detection",  "label": "Hit",
+            {"name": "had_detection",  "label": t("history_col_hit"),
              "field": "had_detection", "sortable": True,  "align": "center"},
-            {"name": "detections",     "label": "Detections",
+            {"name": "detections",     "label": t("history_col_detections"),
              "field": "detections",    "sortable": False, "align": "left"},
             {"name": "snapshot",       "label": "📷",
              "field": "has_frame",     "sortable": False, "align": "center"},
         ]
         if is_teacher:
             teacher_cols = [
-                {"name": "computer",   "label": "Computer",
+                {"name": "computer",   "label": t("history_col_computer"),
                  "field": "computer",   "sortable": True, "align": "left"},
-                {"name": "student",    "label": "Student",
+                {"name": "student",    "label": t("history_student"),
                  "field": "student",    "sortable": True, "align": "left"},
-                {"name": "model_name", "label": "Model",
+                {"name": "model_name", "label": t("history_col_model"),
                  "field": "model_name", "sortable": True, "align": "left"},
             ]
             cols = [base_cols[0]] + teacher_cols + base_cols[1:]
@@ -125,7 +126,7 @@ def page_history() -> None:
             return
         raw_b64 = get_event_frame_b64(int(eid))
         if raw_b64:
-            ann_b64 = get_event_frame_annotated_b64(int(eid))  # re-draws from DB
+            ann_b64 = get_event_frame_annotated_b64(int(eid))
             meta = (
                 f"{row.get('detected_at', '')}  •  "
                 f"{row.get('computer', '—')}  •  "
@@ -133,7 +134,7 @@ def page_history() -> None:
             )
             show_snapshot(raw_b64, meta, ann_b64)
         else:
-            ui.notify("No snapshot stored for this event", type="info")
+            ui.notify(t("history_no_snapshot"), type="info")
 
     tbl.on("view_frame", handle_view_frame)
 
@@ -163,6 +164,6 @@ def page_history() -> None:
             r["model_name"]    = r.get("model_name") or "—"
         tbl.rows = rows
         tbl.update()
-        count.set_text(f"{len(rows)} event(s)")
+        count.set_text(t("history_events_count").format(n=len(rows)))
 
     _load()

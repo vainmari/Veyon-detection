@@ -17,6 +17,7 @@ from nicegui import app as nicegui_app, ui
 import app.state as state
 from app.core.auth import clear_session
 from app.pages._snapshot import make_snapshot_dialogs
+from app.translate import t, get_lang, set_lang
 
 
 def nav(current_user: dict) -> None:
@@ -32,40 +33,40 @@ def nav(current_user: dict) -> None:
         ui.label("🎓 Veyon AI Monitor").classes("font-bold text-base mr-2")
 
         if role == "admin":
-            for label, path in [("Users", "/users"), ("Models", "/models")]:
-                ui.link(label, path).classes(
+            for key, path in [("nav_users", "/users"), ("nav_models", "/models")]:
+                ui.link(t(key), path).classes(
                     "text-gray-300 hover:text-white text-sm no-underline")
 
         elif role == "teacher":
-            for label, path in [
-                ("Dashboard",   "/"),
-                ("History",     "/history"),
-                ("Analytics",   "/analytics"),
-                ("Alert Rules", "/alerts"),
-                ("Groups",      "/groups"),
-                ("Schedules",   "/schedules"),
-                ("Users",       "/users"),
-                ("Models",      "/models"),
-                ("Audit Log",   "/audit"),
-                ("Settings",    "/settings"),
+            for key, path in [
+                ("nav_dashboard",   "/"),
+                ("nav_history",     "/history"),
+                ("nav_analytics",   "/analytics"),
+                ("nav_alert_rules", "/alerts"),
+                ("nav_groups",      "/groups"),
+                ("nav_schedules",   "/schedules"),
+                ("nav_users",       "/users"),
+                ("nav_models",      "/models"),
+                ("nav_audit_log",   "/audit"),
+                ("nav_settings",    "/settings"),
             ]:
-                ui.link(label, path).classes(
+                ui.link(t(key), path).classes(
                     "text-gray-300 hover:text-white text-sm no-underline")
 
         else:  # student
-            for label, path in [
-                ("My History",   "/history"),
-                ("My Analytics", "/analytics"),
+            for key, path in [
+                ("nav_my_history",   "/history"),
+                ("nav_my_analytics", "/analytics"),
             ]:
-                ui.link(label, path).classes(
+                ui.link(t(key), path).classes(
                     "text-gray-300 hover:text-white text-sm no-underline")
 
         if role == "teacher":
             ui.separator().props("vertical").classes("mx-1 opacity-30")
             status_dot = ui.label("").classes("text-xs font-mono")
-            btn_start  = ui.button("▶ Start", color="green").props(
+            btn_start  = ui.button(t("btn_start"), color="green").props(
                 "dense unelevated size=sm")
-            btn_stop   = ui.button("■ Stop",  color="red").props(
+            btn_stop   = ui.button(t("btn_stop"),  color="red").props(
                 "dense unelevated size=sm")
 
             def do_start() -> None:
@@ -77,7 +78,7 @@ def nav(current_user: dict) -> None:
                 try:
                     cfg = collect_cfg()
                 except (ValueError, KeyError) as e:
-                    ui.notify(f"Config error: {e}", type="negative")
+                    ui.notify(t("dash_cfg_error").format(e=e), type="negative")
                     return
                 reset_model()
                 state.monitor = MonitorController(cfg)
@@ -96,12 +97,17 @@ def nav(current_user: dict) -> None:
             def _sync_buttons() -> None:
                 running = state.monitor is not None
                 if running:
-                    status_dot.set_text("● Running")
+                    g = state.monitored_group_name
+                    if g:
+                        label = t("status_running_group").format(g=g)
+                    else:
+                        label = t("status_running_all")
+                    status_dot.set_text(label)
                     status_dot.classes(replace="text-xs font-mono text-green-400")
                     btn_start.props("disable")
                     btn_stop.props(remove="disable")
                 else:
-                    status_dot.set_text("● Stopped")
+                    status_dot.set_text(t("status_stopped"))
                     status_dot.classes(replace="text-xs font-mono text-red-400")
                     btn_start.props(remove="disable")
                     btn_stop.props("disable")
@@ -122,38 +128,38 @@ def _user_menu(current_user: dict, dark) -> None:
     role = current_user["role"]
 
     with ui.dialog() as pwd_dlg, ui.card().classes("p-5 gap-3 w-80"):
-        ui.label("Change Password").classes("text-base font-bold")
+        ui.label(t("pwd_title")).classes("text-base font-bold")
         current_pw = ui.input(
-            "Current password", password=True, password_toggle_button=True,
+            t("pwd_current"), password=True, password_toggle_button=True,
         ).props("dense outlined").classes("w-full")
         new_pw = ui.input(
-            "New password", password=True, password_toggle_button=True,
+            t("pwd_new"), password=True, password_toggle_button=True,
         ).props("dense outlined").classes("w-full")
         confirm_pw = ui.input(
-            "Confirm new password", password=True, password_toggle_button=True,
+            t("pwd_confirm"), password=True, password_toggle_button=True,
         ).props("dense outlined").classes("w-full")
         err_lbl = ui.label("").classes("text-red-400 text-sm")
 
         def do_change() -> None:
             from app.db.database import update_password, verify_password
             if not verify_password(current_user["username"], current_pw.value):
-                err_lbl.set_text("Current password is incorrect.")
+                err_lbl.set_text(t("pwd_err_wrong"))
                 return
             if len(new_pw.value) < 6:
-                err_lbl.set_text("New password must be at least 6 characters.")
+                err_lbl.set_text(t("pwd_err_short"))
                 return
             if new_pw.value != confirm_pw.value:
-                err_lbl.set_text("Passwords do not match.")
+                err_lbl.set_text(t("pwd_err_mismatch"))
                 return
             update_password(current_user["id"], new_pw.value)
             pwd_dlg.close()
             current_pw.set_value(""); new_pw.set_value("")
             confirm_pw.set_value(""); err_lbl.set_text("")
-            ui.notify("✅ Password changed.", type="positive")
+            ui.notify(t("pwd_success"), type="positive")
 
         with ui.row().classes("gap-2"):
-            ui.button("Save",   on_click=do_change).props("color=primary dense")
-            ui.button("Cancel", on_click=pwd_dlg.close).props("flat dense")
+            ui.button(t("pwd_save"),   on_click=do_change).props("color=primary dense")
+            ui.button(t("pwd_cancel"), on_click=pwd_dlg.close).props("flat dense")
 
     label_text = f"{current_user['username']}  ({role})"
     with ui.dropdown_button(
@@ -163,7 +169,7 @@ def _user_menu(current_user: dict, dark) -> None:
         with ui.menu_item():
             with ui.row().classes("items-center gap-3 w-full"):
                 ui.icon("dark_mode").classes("text-base")
-                ui.label("Dark mode").classes("text-sm flex-1")
+                ui.label(t("nav_dark_mode")).classes("text-sm flex-1")
                 ui.switch(
                     value=nicegui_app.storage.user.get("dark_mode", True),
                     on_change=lambda e: (
@@ -174,10 +180,24 @@ def _user_menu(current_user: dict, dark) -> None:
 
         ui.separator()
 
+        # ── Language switcher ──────────────────────────────────────────────────
+        with ui.menu_item():
+            with ui.row().classes("items-center gap-3 w-full"):
+                ui.icon("translate").classes("text-base")
+                ui.label("EN / LT").classes("text-sm flex-1")
+                lang_now = get_lang()
+                ui.toggle(
+                    {"en": "EN", "lt": "LT"},
+                    value=lang_now,
+                    on_change=lambda e: (set_lang(e.value), ui.navigate.reload()),
+                ).props("dense")
+
+        ui.separator()
+
         with ui.menu_item(on_click=pwd_dlg.open):
             with ui.row().classes("items-center gap-3"):
                 ui.icon("lock").classes("text-base")
-                ui.label("Change password").classes("text-sm")
+                ui.label(t("nav_change_password")).classes("text-sm")
 
         ui.separator()
 
@@ -186,7 +206,7 @@ def _user_menu(current_user: dict, dark) -> None:
         ):
             with ui.row().classes("items-center gap-3 text-red-400"):
                 ui.icon("logout").classes("text-base")
-                ui.label("Sign out").classes("text-sm")
+                ui.label(t("nav_sign_out")).classes("text-sm")
 
 
 # ── Notification bell ─────────────────────────────────────────────────────────
@@ -208,9 +228,9 @@ def _notification_bell() -> None:
          ui.card().classes("p-0 h-full rounded-none").style(
              "width:400px; max-width:95vw;"):
         with ui.row().classes("items-center justify-between px-4 py-3 w-full"):
-            ui.label("Notifications").classes("text-base font-bold")
+            ui.label(t("notif_title")).classes("text-base font-bold")
             ui.button(
-                "Mark all read",
+                t("notif_mark_all_read"),
                 on_click=lambda: (mark_all_read(), _reload(), _refresh_badge()),
             ).props("flat dense size=sm color=gray")
         ui.separator()
@@ -224,7 +244,7 @@ def _notification_bell() -> None:
             if not items:
                 with ui.column().classes("items-center w-full p-10 gap-3"):
                     ui.icon("notifications_none").classes("text-5xl text-gray-600")
-                    ui.label("All clear — no alerts yet").classes(
+                    ui.label(t("notif_empty")).classes(
                         "text-gray-500 text-sm")
                 return
             for n in items:
@@ -266,12 +286,11 @@ def _notification_bell() -> None:
                             ann_b64 = get_event_frame_annotated_b64(eid)
                             show_snapshot(raw_b64, meta, ann_b64)
                         else:
-                            ui.notify("Snapshot not available", type="warning")
-
+                            ui.notify(t("notif_no_snapshot"), type="warning")
 
                     ui.button(icon="image", on_click=_view).props(
                         "flat round dense color=blue"
-                    ).tooltip("View snapshot")
+                    ).tooltip(t("notif_view_snapshot"))
 
     def _open_notifs() -> None:
         _reload()

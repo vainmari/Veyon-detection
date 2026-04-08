@@ -10,6 +10,7 @@ from nicegui import ui
 
 from app.core.auth import get_session_user, set_session_user
 from app.db.database import verify_password
+from app.translate import t
 
 
 @ui.page("/login")
@@ -29,21 +30,22 @@ def page_login() -> None:
         "absolute-center items-center gap-4 w-full"
     ).style("max-width: 360px; margin: auto;"):
 
-        ui.label("🎓 Veyon AI Monitor").classes("text-2xl font-bold text-center")
-        ui.label("Sign in to continue").classes("text-gray-400 text-sm mb-2")
+        ui.label(t("login_title")).classes("text-2xl font-bold text-center")
+        ui.label(t("login_subtitle")).classes("text-gray-400 text-sm mb-2")
 
         with ui.card().classes("w-full gap-3 p-6"):
-            username = ui.input("Username").props(
+            username = ui.input(t("login_username")).props(
                 "outlined dense autofocus"
             ).classes("w-full")
-            password = ui.input("Password", password=True, password_toggle_button=True
-                                ).props("outlined dense").classes("w-full")
+            password = ui.input(
+                t("login_password"), password=True, password_toggle_button=True,
+            ).props("outlined dense").classes("w-full")
             error    = ui.label("").classes("text-red-400 text-sm")
 
             def do_login() -> None:
                 u = verify_password(username.value.strip(), password.value)
                 if u is None:
-                    error.set_text("Invalid username or password")
+                    error.set_text(t("login_invalid"))
                     password.set_value("")
                     return
                 set_session_user(u)
@@ -54,7 +56,7 @@ def page_login() -> None:
                 else:
                     ui.navigate.to("/")
 
-            ui.button("Sign in", on_click=do_login).props(
+            ui.button(t("login_btn"), on_click=do_login).props(
                 "color=primary"
             ).classes("w-full mt-2")
 

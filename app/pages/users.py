@@ -12,6 +12,7 @@ from nicegui import context as _ctx
 
 from app.core.auth import is_admin, require_auth
 from app.db.database import (
+    activate_user,
     auto_assign_user_events,
     create_user,
     delete_user,
@@ -127,6 +128,8 @@ def page_users() -> None:
              "field": "username",   "sortable": True, "align": "left"},
             {"name": "role",       "label": t("users_col_role"),
              "field": "role",       "sortable": True, "align": "left"},
+            {"name": "is_active",  "label": t("users_col_status"),
+             "field": "is_active",  "sortable": True, "align": "left"},
             {"name": "created_at", "label": t("users_col_created"),
              "field": "created_at", "sortable": True, "align": "left"},
             {"name": "actions",    "label": "",
@@ -144,9 +147,22 @@ def page_users() -> None:
             </q-td>
         """)
 
+        tbl.add_slot("body-cell-is_active", """
+            <q-td :props="props">
+                <q-badge :color="props.row.is_active ? 'green' : 'grey'">
+                    {{ props.row.is_active ? '""" + t("users_status_active") + """' : '""" + t("users_status_inactive") + """' }}
+                </q-badge>
+            </q-td>
+        """)
+
         if admin:
             tbl.add_slot("body-cell-actions", """
                 <q-td :props="props">
+                    <q-btn
+                        v-if="props.row.role === 'student' && !props.row.is_active"
+                        flat dense round icon="lock_open" color="primary"
+                        @click="$parent.$emit('activate_user', props.row)"
+                    />
                     <q-btn
                         v-if="props.row.role !== 'admin'"
                         flat dense round icon="delete" color="red"
@@ -157,6 +173,11 @@ def page_users() -> None:
         else:
             tbl.add_slot("body-cell-actions", """
                 <q-td :props="props">
+                    <q-btn
+                        v-if="props.row.role === 'student' && !props.row.is_active"
+                        flat dense round icon="lock_open" color="primary"
+                        @click="$parent.$emit('activate_user', props.row)"
+                    />
                     <q-btn
                         v-if="props.row.role === 'student'"
                         flat dense round icon="delete" color="red"
@@ -185,6 +206,56 @@ def page_users() -> None:
             asyncio.create_task(_delete_user_bg(int(uid), uname, client))
 
         tbl.on("delete_user", handle_delete)
+
+        # ── Set password / activate dialog ────────────────────────────────────
+        _activate_row: list[dict] = [{}]
+        with ui.dialog() as activate_dialog, ui.card().classes("w-96"):
+            ui.label(t("users_activate_title")).classes("text-base font-semibold mb-2")
+            activate_name_lbl = ui.label("").classes(
+                "font-mono text-sm text-yellow-600 dark:text-yellow-300 mb-1")
+            act_pwd  = ui.input(
+                t("users_temp_password"),
+                password=True, password_toggle_button=True,
+            ).props("dense outlined").classes("w-full")
+            act_msg  = ui.label("").classes("text-sm")
+            with ui.row().classes("gap-2 mt-2"):
+                async def do_activate() -> None:
+                    pwd = act_pwd.value.strip()
+                    if len(pwd) < 6:
+                        act_msg.set_text(t("pwd_err_short"))
+                        act_msg.classes(replace="text-sm text-red-500")
+                        return
+                    uid = _activate_row[0].get("id")
+                    if not uid:
+                        return
+                    loop = asyncio.get_event_loop()
+                    try:
+                        await loop.run_in_executor(
+                            None, lambda: activate_user(int(uid), pwd)
+                        )
+                        act_msg.set_text(t("users_activated").format(
+                            uname=_activate_row[0].get("username", "")))
+                        act_msg.classes(replace="text-sm text-green-600")
+                        act_pwd.set_value("")
+                        _refresh()
+                    except Exception as e:
+                        act_msg.set_text(t("users_error").format(e=e))
+                        act_msg.classes(replace="text-sm text-red-500")
+
+                ui.button(t("users_activate_btn"), on_click=do_activate).props(
+                    "color=primary dense")
+                ui.button(t("users_create_section_cancel"), on_click=activate_dialog.close).props(
+                    "flat dense")
+
+        def handle_activate(e) -> None:
+            row = e.args
+            _activate_row[0] = row
+            activate_name_lbl.set_text(row.get("username", ""))
+            act_pwd.set_value("")
+            act_msg.set_text("")
+            activate_dialog.open()
+
+        tbl.on("activate_user", handle_activate)
 
     def _refresh() -> None:
         tbl.rows = list_users()

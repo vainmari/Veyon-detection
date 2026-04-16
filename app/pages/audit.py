@@ -1,7 +1,7 @@
 """
 app/pages/audit.py
 ──────────────────
-Audit Log page  /audit  (teacher only)
+Audit Log page  /audit  (teacher + admin)
 
 Shows the chronological record of every significant action performed
 in the system: user management, model activation, alert rule changes, etc.
@@ -47,7 +47,7 @@ def _badge_color(action: str) -> str:
 
 @ui.page("/audit")
 def page_audit() -> None:
-    current = require_auth(required_role="teacher")
+    current = require_auth(required_role="teacher_or_admin")
     if current is None:
         return
     nav(current)

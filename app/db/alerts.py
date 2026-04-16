@@ -11,6 +11,8 @@ student name are derived via JOINs at query time.
 """
 from __future__ import annotations
 
+from typing import Optional
+
 from app.db._core import _conn, _now
 
 
@@ -21,40 +23,45 @@ def list_alert_rules() -> list[dict]:
     c = _conn()
     rows = c.execute("""
         SELECT
-            dc.id          AS class_id,
-            dc.class_index,
+            dc.id  AS class_id,
             dc.name,
             dc.color_hex,
             dc.notification_enabled AS enabled
         FROM detection_class dc
-        ORDER BY dc.class_index
+        ORDER BY dc.name
     """).fetchall()
     return [dict(r) for r in rows]
 
 
 def set_alert_rule(class_id: int, enabled: bool) -> None:
+    from app.db.audit import _insert_audit
     c = _conn()
     c.execute(
         "UPDATE detection_class SET notification_enabled = ? WHERE id = ?",
         (1 if enabled else 0, class_id),
     )
+    _insert_audit(c, "alert.rule", entity="detection_class", entity_id=class_id,
+                  detail="enabled" if enabled else "disabled")
     c.commit()
-    from app.db.audit import log_action
-    log_action("alert.rule", entity="detection_class", entity_id=class_id,
-                detail="enabled" if enabled else "disabled")
 
 
-def get_prohibited_class_ids() -> dict[int, dict]:
+def get_prohibited_class_ids(model_id: Optional[int]) -> dict[int, dict]:
     """
-    Return {class_index: {"id": db_id, "color_hex": str}} for all enabled rules.
-    Used by alert_service to resolve detections to notification rows.
+    Return {class_index: {"id": db_id, "color_hex": str}} for all enabled rules
+    scoped to the given model.  class_index is model-specific (via model_class),
+    so alerts fire on the correct class regardless of index order between models.
+    Returns an empty dict when model_id is None (no active model → no alerts).
     """
+    if model_id is None:
+        return {}
     c = _conn()
     rows = c.execute("""
-        SELECT dc.class_index, dc.id, dc.color_hex
-        FROM detection_class dc
-        WHERE dc.notification_enabled = 1
-    """).fetchall()
+        SELECT mc.class_index, dc.id, dc.color_hex
+        FROM   detection_class dc
+        JOIN   model_class mc ON mc.class_id = dc.id
+        WHERE  dc.notification_enabled = 1
+          AND  mc.model_id = ?
+    """, (model_id,)).fetchall()
     return {r[0]: {"id": r[1], "color_hex": r[2]} for r in rows}
 
 

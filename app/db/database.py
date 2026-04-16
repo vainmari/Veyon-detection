@@ -28,6 +28,7 @@ from app.db.users import (                                                 # noq
     list_roles, get_role_id,
     create_user, update_password, delete_user,
     auto_assign_user_events, nullify_user_events,
+    auto_create_student, activate_user,
     get_user_by_username, get_user_by_id,
     verify_password, list_users,
 )
@@ -45,7 +46,7 @@ from app.db.schedules import (                                              # no
 )
 from app.db.audit import log_action, list_audit_log                        # noqa: F401
 from app.db.detection import (                                             # noqa: F401
-    list_classes, get_class_by_index,
+    list_classes, get_class_by_model_index,
     insert_event, get_event_frame_b64,
     get_event_frame_annotated_b64, count_anonymous_events,
     assign_anonymous_events,

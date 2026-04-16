@@ -55,6 +55,20 @@ DETS = [
     {"class_id": 2, "class_name": "Narsykle", "conf": 0.85, "box": [5, 5, 50, 50]},
 ]
 
+# Class names that match DETS indices 0 and 2 — used for model_class setup.
+_DETS_CLASS_NAMES = ["DI", "Ekrano nuotraukos", "Narsykle"]
+
+
+def _model_for_dets(db) -> int:
+    """Create a model whose class list resolves DETS class indices, return model_id."""
+    model_id = db.create_ml_model(
+        name="test-model",
+        nc=len(_DETS_CLASS_NAMES),
+        class_names=_DETS_CLASS_NAMES,
+    )
+    db.sync_classes_from_model(model_id)
+    return model_id
+
 
 # ── Schema ────────────────────────────────────────────────────────────────────
 
@@ -257,12 +271,13 @@ class TestDetectionEvents:
 
 class TestQueryFilters:
     def _setup(self, db):
-        c1 = db.upsert_computer("PC-01", "10.0.0.1")
-        c2 = db.upsert_computer("PC-02", "10.0.0.2")
-        s  = _student(db)
-        db.insert_event(c1, DETS, user_id=s["id"], windows_username="jonas")
+        c1  = db.upsert_computer("PC-01", "10.0.0.1")
+        c2  = db.upsert_computer("PC-02", "10.0.0.2")
+        s   = _student(db)
+        mid = _model_for_dets(db)
+        db.insert_event(c1, DETS, user_id=s["id"], os_username="jonas", model_id=mid)
         db.insert_event(c1, [])
-        db.insert_event(c2, DETS)
+        db.insert_event(c2, DETS, model_id=mid)
         return c1, c2, s
 
     def test_by_computer(self, db):

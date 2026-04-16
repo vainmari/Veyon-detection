@@ -5,8 +5,9 @@ Shared navigation bar — role-aware.
 
 Roles
 ─────
-  admin   — Users + Models only
-  teacher — Dashboard, History, Analytics, Alert Rules, Users, Models, Settings
+  admin   — Users, Models, Audit Log, Settings
+  teacher — Dashboard, History, Analytics, Alert Rules, Groups, Schedules,
+            Users, Models, Audit Log
             + Start/Stop monitor + notification bell
   student — My History, My Analytics
 """
@@ -33,7 +34,12 @@ def nav(current_user: dict) -> None:
         ui.label("🎓 Veyon AI Monitor").classes("font-bold text-base mr-2")
 
         if role == "admin":
-            for key, path in [("nav_users", "/users"), ("nav_models", "/models")]:
+            for key, path in [
+                ("nav_users",       "/users"),
+                ("nav_models",      "/models"),
+                ("nav_audit_log",   "/audit"),
+                ("nav_settings",    "/settings"),
+            ]:
                 ui.link(t(key), path).classes(
                     "text-gray-300 hover:text-white text-sm no-underline")
 
@@ -48,7 +54,6 @@ def nav(current_user: dict) -> None:
                 ("nav_users",       "/users"),
                 ("nav_models",      "/models"),
                 ("nav_audit_log",   "/audit"),
-                ("nav_settings",    "/settings"),
             ]:
                 ui.link(t(key), path).classes(
                     "text-gray-300 hover:text-white text-sm no-underline")

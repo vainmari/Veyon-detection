@@ -2,6 +2,7 @@
 app/pages/settings.py
 ─────────────────────
 Settings page  /settings  — all configuration in one form.
+Access: admin only (Administratorius → Tvarkyti nustatymus).
 """
 from nicegui import ui
 
@@ -14,7 +15,7 @@ from app.translate import t
 
 @ui.page("/settings")
 def page_settings() -> None:
-    current = require_auth(required_role="teacher")
+    current = require_auth(required_role="admin")
     if current is None:
         return
     nav(current)

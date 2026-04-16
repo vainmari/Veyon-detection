@@ -25,7 +25,7 @@ def _verify_pw(password: str, hashed: str) -> bool:
 _USER_SELECT = """
     SELECT u.id, u.username, u.hashed_password,
            u.role_id, r.name AS role,
-           u.created_by, u.created_at
+           u.is_active, u.created_by, u.created_at
     FROM   user u
     JOIN   role r ON r.id = u.role_id
 """
@@ -51,29 +51,84 @@ def create_user(
     password:      str,
     role:          str,
     created_by_id: Optional[int] = None,
+    is_active:     bool          = True,
 ) -> int:
     """
-    Insert the user row and log the audit entry.  Returns the new user id.
+    Insert the user row and audit entry in a single transaction.
+    Returns the new user id.
 
     Historical event assignment is intentionally NOT done here — call
     auto_assign_user_events(username, new_id) separately (ideally in a
     background task) so this function stays fast.
     """
+    from app.db.audit import _insert_audit
     role_id = get_role_id(role)
     if role_id is None:
         raise ValueError(f"Unknown role: {role!r}")
     c = _conn()
     cur = c.execute(
-        "INSERT INTO user (username, hashed_password, role_id, created_by, created_at) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (username, _hash_pw(password), role_id, created_by_id, _now()),
+        "INSERT INTO user (username, hashed_password, role_id, is_active, created_by, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (username, _hash_pw(password), role_id, 1 if is_active else 0,
+         created_by_id, _now()),
     )
     new_id = cur.lastrowid
+    _insert_audit(c, "user.create", entity="user", entity_id=new_id,
+                  detail=f"role={role}, active={is_active}, created_by={created_by_id}")
     c.commit()
-    from app.db.audit import log_action
-    log_action("user.create", entity="user", entity_id=new_id,
-               detail=f"role={role}, created_by={created_by_id}")
     return new_id
+
+
+def auto_create_student(username: str) -> int:
+    """
+    Create an inactive student account for a detected OS username.
+    Uses INSERT OR IGNORE so concurrent calls are safe.
+    Historical event assignment is intentionally NOT done here — it is
+    deferred to activate_user() so the IO worker thread never holds a
+    long write lock while other threads also need to write.
+    Returns the user id (new or pre-existing).
+    """
+    import secrets
+    from app.db.audit import _insert_audit
+    role_id = get_role_id("student")
+    if role_id is None:
+        raise ValueError("Role 'student' not found")
+    # Random password — cannot be used to log in (is_active=0 blocks login)
+    random_pw = secrets.token_hex(32)
+    c = _conn()
+    cur = c.execute(
+        "INSERT OR IGNORE INTO user "
+        "(username, hashed_password, role_id, is_active, created_at) "
+        "VALUES (?, ?, ?, 0, ?)",
+        (username, _hash_pw(random_pw), role_id, _now()),
+    )
+    if cur.rowcount > 0:
+        new_id = cur.lastrowid
+        _insert_audit(c, "user.auto_create", entity="user", entity_id=new_id,
+                      detail="auto-created inactive student from OS login")
+    c.commit()
+    row = c.execute("SELECT id FROM user WHERE username = ?", (username,)).fetchone()
+    return int(row["id"]) if row else -1
+
+
+def activate_user(user_id: int, new_password: str) -> None:
+    """
+    Set a real password and mark the user active so they can log in.
+    Also assigns any historical anonymous events that match this user's
+    username (safe here because this runs in a UI executor thread, not
+    a hot-path IO worker).
+    """
+    from app.db.audit import _insert_audit
+    c = _conn()
+    row = c.execute("SELECT username FROM user WHERE id = ?", (user_id,)).fetchone()
+    c.execute(
+        "UPDATE user SET hashed_password = ?, is_active = 1 WHERE id = ?",
+        (_hash_pw(new_password), user_id),
+    )
+    _insert_audit(c, "user.activate", entity="user", entity_id=user_id)
+    c.commit()
+    if row:
+        auto_assign_user_events(row["username"], user_id)
 
 
 def auto_assign_user_events(username: str, user_id: int, batch_size: int = 500) -> int:
@@ -133,14 +188,14 @@ def nullify_user_events(user_id: int, batch_size: int = 500) -> int:
 
 
 def update_password(user_id: int, new_password: str) -> None:
+    from app.db.audit import _insert_audit
     c = _conn()
     c.execute(
         "UPDATE user SET hashed_password = ? WHERE id = ?",
         (_hash_pw(new_password), user_id),
     )
+    _insert_audit(c, "user.password_change", entity="user", entity_id=user_id)
     c.commit()
-    from app.db.audit import log_action
-    log_action("user.password_change", entity="user", entity_id=user_id)
 
 
 def delete_user(user_id: int) -> None:
@@ -165,7 +220,7 @@ def get_user_by_id(user_id: int) -> Optional[dict]:
 
 def verify_password(username: str, password: str) -> Optional[dict]:
     user = get_user_by_username(username)
-    if user and _verify_pw(password, user["hashed_password"]):
+    if user and user.get("is_active") and _verify_pw(password, user["hashed_password"]):
         return user
     return None
 

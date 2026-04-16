@@ -33,6 +33,7 @@ from app.core.imaging import postprocess, img_to_b64
 from app.core.veyon import WEBAPI_BASE_TPL
 from app.services import alert_service
 from app.db.database import (
+    auto_create_student,
     get_active_model,
     get_user_by_id,
     get_user_by_username,
@@ -203,13 +204,17 @@ class MonitorController:
             if os_login_raw:
                 os_login = _parse_os_username(os_login_raw)
                 db_user  = get_user_by_username(os_login)
-                state.computer_users[name]        = db_user["id"] if db_user else None
-                state.computer_os_usernames[name] = os_login
-                if not db_user:
+                if db_user is None:
+                    # Auto-create an inactive placeholder so events are linked
+                    # and the name is shown in the dashboard immediately.
+                    new_id  = auto_create_student(os_login)
+                    db_user = get_user_by_id(new_id)
                     self._log(
                         f"[{name}] OS user '{os_login}' — "
-                        "no system account yet (events logged with username)"
+                        "auto-created inactive student account"
                     )
+                state.computer_users[name]        = db_user["id"] if db_user else None
+                state.computer_os_usernames[name] = os_login
             else:
                 state.computer_users[name]        = None
                 state.computer_os_usernames[name] = None
@@ -293,6 +298,7 @@ class MonitorController:
                         )
                         n_fired = alert_service.check_and_fire(
                             ev_id, dets, comp_name,
+                            model_id=active_model_id,
                         )
                         student_disp = os_uname or "—"
                         if user_id:
@@ -338,6 +344,7 @@ def drain_worker() -> None:
             while True:
                 msg = state.log_q.get_nowait()
                 state.log_buffer.append(msg)
+                state.log_total += 1
                 if len(state.log_buffer) > state.LOG_CAP:
                     state.log_buffer.pop(0)
         except queue.Empty:

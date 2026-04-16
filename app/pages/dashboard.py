@@ -111,7 +111,7 @@ def page_dashboard() -> None:
                     t("dash_clear"),
                     on_click=lambda: (
                         log_view.set_value(""),
-                        log_offset.__setitem__(0, len(state.log_buffer)),
+                        log_seq.__setitem__(0, state.log_total),
                     ),
                 ).props("flat dense size=xs")
             log_view = ui.textarea(value="").props(
@@ -122,7 +122,7 @@ def page_dashboard() -> None:
                 "dark:bg-gray-950 dark:text-green-300"
             ).style("flex: 1; min-height: 200px; resize: none;")
 
-    log_offset = [0]
+    log_seq = [0]          # how many total log messages we have already displayed
     _last_src:    list[str]       = [""]   # deduplicate set_source calls → no flicker
     _mon_names:   list[set[str]]  = [set()]  # computer names for the active session
 
@@ -191,9 +191,16 @@ def page_dashboard() -> None:
 
     def tick() -> None:
         # ── Console: prepend new lines so newest appears at the top ───────────
-        new = state.log_buffer[log_offset[0]:]
-        log_offset[0] = len(state.log_buffer)
-        if new:
+        # Use a monotonic total counter so we never lose entries when the buffer
+        # trims old messages from the front (pop(0) shifts all list indices).
+        total = state.log_total
+        new_count = total - log_seq[0]
+        if new_count > 0:
+            log_seq[0] = total
+            # The buffer holds at most LOG_CAP entries (most recent).
+            # Grab the last new_count entries — clamped to what's available.
+            buf = state.log_buffer
+            new = buf[max(0, len(buf) - new_count):]
             new_block = "\n".join(reversed(new))
             old = log_view.value or ""
             combined = new_block + ("\n" + old if old else "")

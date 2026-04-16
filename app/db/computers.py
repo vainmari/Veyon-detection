@@ -9,10 +9,18 @@ from app.db._core import _conn, _now
 
 
 def upsert_computer(name: str, host_address: str) -> int:
-    """Return existing computer id or insert a new row and return its id."""
+    """
+    Insert a new computer or update its host_address if it already exists.
+    Always returns the computer's id.
+    """
     c = _conn()
     row = c.execute("SELECT id FROM computer WHERE name = ?", (name,)).fetchone()
     if row:
+        c.execute(
+            "UPDATE computer SET host_address = ? WHERE id = ?",
+            (host_address, row["id"]),
+        )
+        c.commit()
         return row["id"]
     cur = c.execute(
         "INSERT INTO computer (name, host_address, created_at) VALUES (?, ?, ?)",

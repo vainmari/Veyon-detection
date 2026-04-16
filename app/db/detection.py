@@ -17,15 +17,18 @@ from app.db._core import _conn, _now
 def list_classes() -> list[dict]:
     c = _conn()
     return [dict(r) for r in c.execute(
-        "SELECT * FROM detection_class ORDER BY class_index"
+        "SELECT * FROM detection_class ORDER BY name"
     ).fetchall()]
 
 
-def get_class_by_index(class_index: int) -> Optional[dict]:
+def get_class_by_model_index(model_id: int, class_index: int) -> Optional[dict]:
     c = _conn()
-    row = c.execute(
-        "SELECT * FROM detection_class WHERE class_index = ?", (class_index,)
-    ).fetchone()
+    row = c.execute("""
+        SELECT dc.*
+        FROM   model_class mc
+        JOIN   detection_class dc ON dc.id = mc.class_id
+        WHERE  mc.model_id = ? AND mc.class_index = ?
+    """, (model_id, class_index)).fetchone()
     return dict(row) if row else None
 
 
@@ -53,9 +56,12 @@ def insert_event(
     )
     event_id = cur.lastrowid
     for d in dets:
+        if model_id is None:
+            continue
         cls_row = c.execute(
-            "SELECT id FROM detection_class WHERE class_index = ?",
-            (d["class_id"],),
+            "SELECT mc.class_id FROM model_class mc "
+            "WHERE mc.model_id = ? AND mc.class_index = ?",
+            (model_id, d["class_id"]),
         ).fetchone()
         if cls_row is None:
             continue
@@ -63,7 +69,7 @@ def insert_event(
             "INSERT INTO detection "
             "(event_id, class_id, confidence, box_x1, box_y1, box_x2, box_y2) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (event_id, cls_row["id"], d["conf"], *d["box"]),
+            (event_id, cls_row[0], d["conf"], *d["box"]),
         )
     c.commit()
     return event_id
@@ -89,7 +95,7 @@ def get_event_frame_annotated_b64(event_id: int) -> Optional[str]:
     """
     import cv2 as _cv2
     import numpy as _np
-    from app.core.colors import BGR_PALETTE
+    from app.core.colors import hex_to_bgr
 
     c = _conn()
     row = c.execute(
@@ -105,14 +111,14 @@ def get_event_frame_annotated_b64(event_id: int) -> Optional[str]:
 
     dets = c.execute("""
         SELECT d.box_x1, d.box_y1, d.box_x2, d.box_y2,
-               dc.class_index, dc.name, d.confidence
+               dc.color_hex, dc.name, d.confidence
         FROM   detection d
         JOIN   detection_class dc ON dc.id = d.class_id
         WHERE  d.event_id = ?
     """, (event_id,)).fetchall()
 
-    for x1, y1, x2, y2, cidx, label, conf in dets:
-        color = BGR_PALETTE[cidx % len(BGR_PALETTE)]
+    for x1, y1, x2, y2, color_hex, label, conf in dets:
+        color = hex_to_bgr(color_hex)
         _cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
         text = f"{label} {conf:.0%}"
         (tw, th), _ = _cv2.getTextSize(text, _cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)

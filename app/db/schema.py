@@ -14,13 +14,13 @@ import sqlite3
 from app.db._core import DB_PATH, _conn, _now, _table_exists, _cols
 
 DEFAULT_CLASSES: list[dict] = [
-    {"index": 0, "name": "DI",               "color": "#00ff00"},
-    {"index": 1, "name": "Ekrano nuotraukos", "color": "#ff8000"},
-    {"index": 2, "name": "Narsykle",          "color": "#0080ff"},
-    {"index": 3, "name": "Notepad",           "color": "#8000ff"},
-    {"index": 4, "name": "Paint",             "color": "#00ffff"},
-    {"index": 5, "name": "PowerPoint",        "color": "#ff0080"},
-    {"index": 6, "name": "Word",              "color": "#40c840"},
+    {"name": "DI",               "color": "#00ff00"},
+    {"name": "Ekrano nuotraukos", "color": "#ff8000"},
+    {"name": "Narsykle",          "color": "#0080ff"},
+    {"name": "Notepad",           "color": "#8000ff"},
+    {"name": "Paint",             "color": "#00ffff"},
+    {"name": "PowerPoint",        "color": "#ff0080"},
+    {"name": "Word",              "color": "#40c840"},
 ]
 
 
@@ -214,6 +214,100 @@ def _migrate(c: sqlite3.Connection) -> None:
         )
         c.commit()
 
+    # 12. detection_class: drop class_index — it is model-specific and belongs in
+    #     model_class(model_id, class_index, class_id).  Having it on detection_class
+    #     meant two models with the same class at different indices would corrupt
+    #     each other's name mapping on sync.
+    if _table_exists(c, "detection_class") and "class_index" in _cols(c, "detection_class"):
+        c.executescript("""
+            PRAGMA foreign_keys = OFF;
+
+            CREATE TABLE detection_class_v2 (
+                id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+                name                  TEXT    NOT NULL UNIQUE,
+                color_hex             TEXT    NOT NULL,
+                notification_enabled  INTEGER NOT NULL DEFAULT 0,
+                created_at            TEXT    NOT NULL
+            );
+
+            INSERT INTO detection_class_v2
+                   (id, name, color_hex, notification_enabled, created_at)
+            SELECT  id, name, color_hex, notification_enabled, created_at
+            FROM    detection_class;
+
+            DROP TABLE detection_class;
+            ALTER TABLE detection_class_v2 RENAME TO detection_class;
+
+            PRAGMA foreign_keys = ON;
+        """)
+        # executescript auto-commits; create model_class and populate it now.
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS model_class (
+                model_id    INTEGER NOT NULL REFERENCES ml_model(id)        ON DELETE CASCADE,
+                class_index INTEGER NOT NULL,
+                class_id    INTEGER NOT NULL REFERENCES detection_class(id) ON DELETE CASCADE,
+                UNIQUE(model_id, class_index)
+            )
+        """)
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_mc_model ON model_class(model_id)"
+        )
+        # Back-fill model_class from each model's stored classes_json.
+        import json as _json
+        for m_id, classes_json in c.execute(
+            "SELECT id, classes_json FROM ml_model"
+        ).fetchall():
+            try:
+                names = _json.loads(classes_json or "[]")
+            except Exception:
+                names = []
+            for idx, name in enumerate(names):
+                dc = c.execute(
+                    "SELECT id FROM detection_class WHERE name = ?", (name,)
+                ).fetchone()
+                if dc:
+                    c.execute(
+                        "INSERT OR IGNORE INTO model_class "
+                        "(model_id, class_index, class_id) VALUES (?, ?, ?)",
+                        (m_id, idx, dc[0]),
+                    )
+        c.commit()
+
+    # 13. notification.event_id: ON DELETE SET NULL → ON DELETE CASCADE.
+    #     A notification whose event has been deleted (e.g. because its computer
+    #     was removed) has no frame, no computer, and no student to display — it
+    #     is a ghost record that counts against the unread badge but can never be
+    #     investigated.  Cascade-delete removes it together with its event.
+    #     Existing NULL event_id rows (already-orphaned ghosts) are pruned here too.
+    #     Detection is based on absence of CASCADE in the stored DDL.
+    if _table_exists(c, "notification"):
+        ddl = c.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='notification'"
+        ).fetchone()
+        if ddl and "CASCADE" not in (ddl[0] or "").upper():
+            c.executescript("""
+                PRAGMA foreign_keys = OFF;
+
+                CREATE TABLE notification_v3 (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_id   INTEGER REFERENCES detection_event(id) ON DELETE CASCADE,
+                    class_id   INTEGER REFERENCES detection_class(id) ON DELETE SET NULL,
+                    is_read    INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT    NOT NULL
+                );
+
+                INSERT INTO notification_v3 (id, event_id, class_id, is_read, created_at)
+                SELECT id, event_id, class_id, is_read, created_at
+                FROM   notification
+                WHERE  event_id IS NOT NULL;
+
+                DROP TABLE notification;
+                ALTER TABLE notification_v3 RENAME TO notification;
+
+                PRAGMA foreign_keys = ON;
+            """)
+            c.commit()
+
     # 10b. Drop computer.group_id — superseded by computer_group_member.
     if _table_exists(c, "computer") and "group_id" in _cols(c, "computer"):
         c.executescript("""
@@ -234,6 +328,13 @@ def _migrate(c: sqlite3.Connection) -> None:
 
             PRAGMA foreign_keys = ON;
         """)
+        c.commit()
+
+    # 14. user.is_active — 1 = active (can log in), 0 = auto-created placeholder.
+    if _table_exists(c, "user") and "is_active" not in _cols(c, "user"):
+        c.execute(
+            "ALTER TABLE user ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1"
+        )
         c.commit()
 
     # 7. notification: remove redundant computer/student TEXT columns.
@@ -279,6 +380,7 @@ def init_db() -> None:
             username        TEXT    NOT NULL UNIQUE,
             hashed_password TEXT    NOT NULL,
             role_id         INTEGER NOT NULL REFERENCES role(id),
+            is_active       INTEGER NOT NULL DEFAULT 1,
             created_by      INTEGER REFERENCES user(id) ON DELETE SET NULL,
             created_at      TEXT    NOT NULL
         );
@@ -341,9 +443,11 @@ def init_db() -> None:
         CREATE INDEX IF NOT EXISTS idx_audit_time ON audit_log(created_at);
 
         -- detection classes ───────────────────────────────────────────────────
+        -- class_index is intentionally absent: it is model-specific and lives in
+        -- model_class instead, so two models can share a class name at different
+        -- indices without corrupting each other's mapping.
         CREATE TABLE IF NOT EXISTS detection_class (
             id                    INTEGER PRIMARY KEY AUTOINCREMENT,
-            class_index           INTEGER NOT NULL UNIQUE,
             name                  TEXT    NOT NULL UNIQUE,
             color_hex             TEXT    NOT NULL,
             notification_enabled  INTEGER NOT NULL DEFAULT 0,
@@ -371,6 +475,10 @@ def init_db() -> None:
         CREATE INDEX IF NOT EXISTS idx_event_user_time ON detection_event(user_id, detected_at);
 
         -- detections ──────────────────────────────────────────────────────────
+        -- class_id uses RESTRICT (not CASCADE/SET NULL) so that deleting a
+        -- detection_class is permanently blocked while any detection references it.
+        -- To remove a class you must first delete all detection_event rows for it
+        -- (which cascade-delete their detection children automatically).
         CREATE TABLE IF NOT EXISTS detection (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
             event_id   INTEGER NOT NULL REFERENCES detection_event(id) ON DELETE CASCADE,
@@ -386,9 +494,11 @@ def init_db() -> None:
 
         -- notifications ───────────────────────────────────────────────────────
         -- computer and student are derived via event_id JOINs at query time.
+        -- event_id uses CASCADE: a notification whose event is gone has no frame,
+        -- computer, or student to display and should not survive its event.
         CREATE TABLE IF NOT EXISTS notification (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            event_id   INTEGER REFERENCES detection_event(id) ON DELETE SET NULL,
+            event_id   INTEGER REFERENCES detection_event(id) ON DELETE CASCADE,
             class_id   INTEGER REFERENCES detection_class(id) ON DELETE SET NULL,
             is_read    INTEGER NOT NULL DEFAULT 0,
             created_at TEXT    NOT NULL
@@ -421,6 +531,18 @@ def init_db() -> None:
             created_at   TEXT    NOT NULL,
             finished_at  TEXT
         );
+
+        -- model → class index mapping ─────────────────────────────────────────
+        -- Maps each model's raw output class indices to detection_class rows.
+        -- Kept separate so two models can assign the same class at different
+        -- indices without corrupting each other's mapping.
+        CREATE TABLE IF NOT EXISTS model_class (
+            model_id    INTEGER NOT NULL REFERENCES ml_model(id)        ON DELETE CASCADE,
+            class_index INTEGER NOT NULL,
+            class_id    INTEGER NOT NULL REFERENCES detection_class(id) ON DELETE CASCADE,
+            UNIQUE(model_id, class_index)
+        );
+        CREATE INDEX IF NOT EXISTS idx_mc_model ON model_class(model_id);
     """)
     # Seed roles idempotently after CREATE TABLE IF NOT EXISTS
     c.executemany(
@@ -436,8 +558,8 @@ def seed_classes() -> None:
     if c.execute("SELECT COUNT(*) FROM detection_class").fetchone()[0] == 0:
         now = _now()
         c.executemany(
-            "INSERT INTO detection_class (class_index, name, color_hex, created_at) "
-            "VALUES (:index, :name, :color, :now)",
+            "INSERT OR IGNORE INTO detection_class (name, color_hex, created_at) "
+            "VALUES (:name, :color, :now)",
             [{**cls, "now": now} for cls in DEFAULT_CLASSES],
         )
         c.commit()

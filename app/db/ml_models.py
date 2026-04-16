@@ -97,12 +97,12 @@ def get_model_by_id(model_id: int) -> Optional[dict]:
 
 
 def set_active_model(model_id: int) -> None:
+    from app.db.audit import _insert_audit
     c = _conn()
     c.execute("UPDATE ml_model SET is_active = 0")
     c.execute("UPDATE ml_model SET is_active = 1 WHERE id = ?", (model_id,))
+    _insert_audit(c, "model.activate", entity="ml_model", entity_id=model_id)
     c.commit()
-    from app.db.audit import log_action
-    log_action("model.activate", entity="ml_model", entity_id=model_id)
 
 
 def list_models() -> list[dict]:
@@ -128,7 +128,15 @@ def delete_model(model_id: int) -> None:
 # ── Class sync ────────────────────────────────────────────────────────────────
 
 def sync_classes_from_model(model_id: int) -> None:
-    """Upsert detection_class rows from a trained model's class list."""
+    """
+    Upsert detection_class rows from a trained model's class list, then
+    record the model-specific index mapping in model_class.
+
+    detection_class is keyed by name — two models that share a class name
+    reuse the same detection_class row (and its color / notification settings).
+    model_class maps each model's raw output index to the correct class row so
+    models with identical classes at different indices never corrupt each other.
+    """
     from app.core.colors import class_hex
     model = get_model_by_id(model_id)
     if not model:
@@ -136,11 +144,23 @@ def sync_classes_from_model(model_id: int) -> None:
     names = model.get("class_names", [])
     c = _conn()
     for i, name in enumerate(names):
+        # Upsert detection_class by name (not by index).
         c.execute("""
-            INSERT INTO detection_class (class_index, name, color_hex, created_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(class_index) DO UPDATE SET
-                name      = excluded.name,
+            INSERT INTO detection_class (name, color_hex, created_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET
                 color_hex = excluded.color_hex
-        """, (i, name, class_hex(i), _now()))
+        """, (name, class_hex(i), _now()))
+
+        dc_id = c.execute(
+            "SELECT id FROM detection_class WHERE name = ?", (name,)
+        ).fetchone()[0]
+
+        # Record this model's index → class mapping.
+        c.execute("""
+            INSERT INTO model_class (model_id, class_index, class_id)
+            VALUES (?, ?, ?)
+            ON CONFLICT(model_id, class_index) DO UPDATE SET
+                class_id = excluded.class_id
+        """, (model_id, i, dc_id))
     c.commit()

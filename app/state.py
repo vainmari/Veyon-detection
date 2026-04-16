@@ -32,6 +32,7 @@ img_q: queue.Queue[tuple[str, np.ndarray, np.ndarray, list]] = queue.Queue(maxsi
 latest_frames:          dict[str, tuple[str, str, list]] = {}
 #                                        ↑ ann_b64  ↑ raw_b64
 log_buffer:             list[str]                   = []
+log_total:              int                         = 0   # monotonic count of all messages ever added
 LOG_CAP = 500
 
 computer_ids:           dict[str, int]           = {}

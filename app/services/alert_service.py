@@ -11,6 +11,8 @@ effectively atomic on CPython's GIL for simple key/value ops).
 """
 from __future__ import annotations
 
+from typing import Optional
+
 import app.state as state
 from app.config import get_settings
 from app.db.database import get_prohibited_class_ids, insert_notification
@@ -20,6 +22,7 @@ def check_and_fire(
     event_id: int,
     dets:     list[dict],
     computer: str,
+    model_id: Optional[int] = None,
 ) -> int:
     """
     For each detection whose class_id (YOLO index) is in the prohibited set,
@@ -37,7 +40,7 @@ def check_and_fire(
     -------
     Number of notifications fired this call.
     """
-    prohibited = get_prohibited_class_ids()   # {class_index: {"id": db_id, ...}}
+    prohibited = get_prohibited_class_ids(model_id)   # {class_index: {"id": db_id, ...}}
     if not prohibited:
         # Reset all counters for this computer when there are no rules
         for key in list(state.consecutive_detections):

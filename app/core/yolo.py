@@ -17,7 +17,7 @@ def get_model(path: str) -> YOLO:
     global _model
     with _model_lock:
         if _model is None:
-            _model = YOLO(path)
+            _model = YOLO(path, task="detect")
     return _model
 
 

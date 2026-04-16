@@ -280,7 +280,7 @@ class MonitorController:
 
                     # Store the RAW frame so the DB always holds clean pixels.
                     ok, buf = cv2.imencode(
-                        ".jpg", img_bgr, [cv2.IMWRITE_JPEG_QUALITY, 75]     # ← raw stored
+                        ".jpg", img_bgr, [cv2.IMWRITE_JPEG_QUALITY, int(cfg["img_quality"])]
                     )
                     frame_bytes = buf.tobytes() if ok else None
 

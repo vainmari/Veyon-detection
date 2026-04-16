@@ -41,8 +41,16 @@ MODELS_DIR   = Path("data/models")
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
 DATASETS_DIR.mkdir(parents=True, exist_ok=True)
 
-BASE_MODELS = ["yolo11n.pt", "yolo11s.pt", "yolo11m.pt",
-               "yolo11l.pt", "yolo11x.pt"]
+BASE_MODELS = [
+                "yolov5n.pt", "yolov5s.pt", "yolov5m.pt",
+                "yolov8n.pt", "yolov8s.pt", "yolov8m.pt",
+            #   "yolov9t.pt", "yolov9s.pt", "yolov9m.pt",
+            #   "yolov10n.pt", "yolov10s.pt", "yolov10m.pt",
+                "yolo11n.pt", "yolo11s.pt", "yolo11m.pt",
+            #   "yolov12n.pt", "yolov12s.pt", "yolov12m.pt",
+            #   "yolov13n.pt", "yolov13s.pt", "yolov13m.pt",
+               "yolo26n.pt", "yolo26s.pt", "yolo26m.pt",
+]
 
 
 # ── GPU detection ─────────────────────────────────────────────────────────────

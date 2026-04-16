@@ -97,7 +97,7 @@ class TestSchema:
             cols = {r[1] for r in c.execute(
                 "PRAGMA table_info(detection_event)"
             )}
-        assert "windows_username" in cols
+        assert "os_username" in cols
 
     def test_seed_classes_count(self, db):
         assert len(db.list_classes()) == 7
@@ -227,16 +227,16 @@ class TestDetectionEvents:
 
     def test_windows_username_stored(self, db):
         cid = _computer(db)
-        db.insert_event(cid, [], windows_username="Jonas")
+        db.insert_event(cid, [], os_username="Jonas")
         with sqlite3.connect(db.DB_PATH) as c:
             row = c.execute(
-                "SELECT windows_username FROM detection_event"
+                "SELECT os_username FROM detection_event"
             ).fetchone()
         assert row[0] == "Jonas"
 
     def test_windows_username_shown_when_no_account(self, db):
         cid = _computer(db)
-        db.insert_event(cid, DETS, windows_username="Jonas")
+        db.insert_event(cid, DETS, os_username="Jonas")
         rows = db.query_events(computer_id=cid)
         assert rows[0]["student"] == "Jonas"
 
@@ -312,27 +312,27 @@ class TestAutoAssign:
     def test_events_assigned_on_user_creation(self, db):
         cid = _computer(db)
         for _ in range(3):
-            db.insert_event(cid, DETS, windows_username="Jonas")
-        db.create_user("Jonas", "pw", "student")
-        uid  = db.get_user_by_username("Jonas")["id"]
+            db.insert_event(cid, DETS, os_username="Jonas")
+        uid = db.create_user("Jonas", "pw", "student")
+        db.auto_assign_user_events("Jonas", uid)
         rows = db.query_events(user_id=uid)
         assert len(rows) == 3
 
     def test_case_insensitive_match(self, db):
         cid = _computer(db)
-        db.insert_event(cid, [], windows_username="JONAS")
-        db.create_user("jonas", "pw", "student")
-        uid  = db.get_user_by_username("jonas")["id"]
+        db.insert_event(cid, [], os_username="JONAS")
+        uid = db.create_user("jonas", "pw", "student")
+        db.auto_assign_user_events("jonas", uid)
         rows = db.query_events(user_id=uid)
         assert len(rows) == 1
 
     def test_already_assigned_not_touched(self, db):
         cid   = _computer(db)
         other = _student(db, "other")
-        db.insert_event(cid, [], user_id=other["id"], windows_username="other")
-        db.insert_event(cid, [], windows_username="Jonas")
-        db.create_user("Jonas", "pw", "student")
-        uid  = db.get_user_by_username("Jonas")["id"]
+        db.insert_event(cid, [], user_id=other["id"], os_username="other")
+        db.insert_event(cid, [], os_username="Jonas")
+        uid = db.create_user("Jonas", "pw", "student")
+        db.auto_assign_user_events("Jonas", uid)
         assert len(db.query_events(user_id=uid)) == 1
 
     def test_no_matching_events_is_fine(self, db):

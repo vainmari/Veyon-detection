@@ -76,26 +76,28 @@ class TestDecodeImage:
 
 # ── authenticate ──────────────────────────────────────────────────────────────
 
+_KEY_CFG = {"auth_method": "key", "key_name": "class", "key_data": "KEYDATA"}
+
+
 class TestAuthenticate:
     def test_returns_uid_on_success(self):
         sess, _ = _mock_session(200, json_data={"connection-uid": "abc-123"})
-        uid = veyon.authenticate(sess, "http://host/api/v1", "10.0.0.1",
-                                 "class", "KEYDATA")
+        uid = veyon.authenticate(sess, "http://host/api/v1", "10.0.0.1", _KEY_CFG)
         assert uid == "abc-123"
 
     def test_returns_none_on_non_200(self):
         sess, _ = _mock_session(401)
-        assert veyon.authenticate(sess, "http://x", "h", "k", "d") is None
+        assert veyon.authenticate(sess, "http://x", "h", _KEY_CFG) is None
 
     def test_returns_none_on_request_exception(self):
         sess = MagicMock()
         import requests
         sess.post.side_effect = requests.RequestException("timeout")
-        assert veyon.authenticate(sess, "http://x", "h", "k", "d") is None
+        assert veyon.authenticate(sess, "http://x", "h", _KEY_CFG) is None
 
     def test_correct_endpoint_called(self):
         sess, _ = _mock_session(200, json_data={"connection-uid": "x"})
-        veyon.authenticate(sess, "http://host/api/v1", "10.0.0.2", "k", "d")
+        veyon.authenticate(sess, "http://host/api/v1", "10.0.0.2", _KEY_CFG)
         sess.post.assert_called_once()
         url = sess.post.call_args[0][0]
         assert "10.0.0.2" in url

@@ -273,6 +273,11 @@ class MonitorController:
                     verbose=False, device=device, rect=True,
                 )
 
+                # Re-fetch active model each batch in case it changed
+                if active_model_id is None:
+                    _active = get_active_model()
+                    active_model_id = _active["id"] if _active else None
+
                 for comp_name, res, img_bgr in zip(valid_names, results, imgs):
                     annotated, dets = postprocess(
                         res, img_bgr, bool(cfg["keep_top1"])

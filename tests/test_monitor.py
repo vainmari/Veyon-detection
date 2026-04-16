@@ -17,7 +17,7 @@ import pytest
 
 from app.services.monitor_service import (
     MonitorController,
-    _parse_win_username,
+    _parse_os_username as _parse_win_username,
     drain_worker,
 )
 import app.state as state
@@ -33,7 +33,7 @@ def reset_state():
     state.latest_frames.clear()
     state.computer_ids.clear()
     state.computer_users.clear()
-    state.computer_win_usernames.clear()
+    state.computer_os_usernames.clear()
     # drain log_q and img_q
     for q in (state.log_q, state.img_q):
         while not q.empty():
@@ -99,23 +99,23 @@ class TestDrainWorker:
 
     def test_drains_image_queue(self):
         img = np.zeros((10, 10, 3), dtype=np.uint8)
-        state.img_q.put(("PC-01", img, []))
+        state.img_q.put(("PC-01", img, img, []))
         self._run_briefly()
         assert "PC-01" in state.latest_frames
 
     def test_latest_frame_overwritten_by_newer(self):
         img1 = np.zeros((10, 10, 3), dtype=np.uint8)
         img2 = np.full((10, 10, 3), 255, dtype=np.uint8)
-        state.img_q.put(("PC-01", img1, [{"class_name": "old"}]))
-        state.img_q.put(("PC-01", img2, [{"class_name": "new"}]))
+        state.img_q.put(("PC-01", img1, img1, [{"class_name": "old"}]))
+        state.img_q.put(("PC-01", img2, img2, [{"class_name": "new"}]))
         self._run_briefly()
-        _, dets = state.latest_frames["PC-01"]
+        _, _, dets = state.latest_frames["PC-01"]
         assert dets[0]["class_name"] == "new"
 
     def test_multiple_computers_tracked(self):
         img = np.zeros((5, 5, 3), dtype=np.uint8)
-        state.img_q.put(("PC-01", img, []))
-        state.img_q.put(("PC-02", img, []))
+        state.img_q.put(("PC-01", img, img, []))
+        state.img_q.put(("PC-02", img, img, []))
         self._run_briefly()
         assert "PC-01" in state.latest_frames
         assert "PC-02" in state.latest_frames
@@ -190,50 +190,48 @@ class TestDetectWorkerDBIntegration:
     user_id, and windows_username.
     """
 
-    def test_event_inserted_with_windows_username(self, cfg, tmp_path):
-        from pathlib import Path
+    def _setup_db(self, monkeypatch, tmp_path, name="test.db"):
         import app.db.database as db_module
-
-        # Point DB to a temp file
-        original_path = db_module.DB_PATH
-        db_module.DB_PATH = tmp_path / "test.db"
+        import app.db._core as _core
+        monkeypatch.setattr(_core,      "DB_PATH", tmp_path / name)
+        monkeypatch.setattr(db_module,  "DB_PATH", tmp_path / name)
+        if hasattr(_core._tls, "conn"):
+            try:
+                _core._tls.conn.close()
+            except Exception:
+                pass
+            del _core._tls.conn
+            del _core._tls.db_path
         db_module.init_db()
         db_module.seed_classes()
+        return db_module
 
-        try:
-            cid = db_module.upsert_computer("PC-01", "10.0.0.1")
-            state.computer_ids["PC-01"]          = cid
-            state.computer_users["PC-01"]        = None
-            state.computer_win_usernames["PC-01"] = "Jonas"
+    def test_event_inserted_with_windows_username(self, cfg, tmp_path, monkeypatch):
+        db_module = self._setup_db(monkeypatch, tmp_path)
 
-            db_module.insert_event(
-                cid, [],
-                user_id=None,
-                windows_username=state.computer_win_usernames["PC-01"],
-            )
-            rows = db_module.query_events(computer_id=cid)
-            assert len(rows) == 1
-            assert rows[0]["student"] == "Jonas"
-        finally:
-            db_module.DB_PATH = original_path
+        cid = db_module.upsert_computer("PC-01", "10.0.0.1")
+        state.computer_ids["PC-01"]          = cid
+        state.computer_users["PC-01"]        = None
+        state.computer_os_usernames["PC-01"] = "Jonas"
 
-    def test_auto_assign_after_user_creation(self, cfg, tmp_path):
-        from pathlib import Path
-        import app.db.database as db_module
+        db_module.insert_event(
+            cid, [],
+            user_id=None,
+            os_username=state.computer_os_usernames["PC-01"],
+        )
+        rows = db_module.query_events(computer_id=cid)
+        assert len(rows) == 1
+        assert rows[0]["student"] == "Jonas"
 
-        original_path = db_module.DB_PATH
-        db_module.DB_PATH = tmp_path / "test2.db"
-        db_module.init_db()
-        db_module.seed_classes()
+    def test_auto_assign_after_user_creation(self, cfg, tmp_path, monkeypatch):
+        db_module = self._setup_db(monkeypatch, tmp_path, "test2.db")
 
-        try:
-            cid = db_module.upsert_computer("PC-01", "10.0.0.1")
-            # Log 2 events before account exists
-            db_module.insert_event(cid, [], windows_username="Jonas")
-            db_module.insert_event(cid, [], windows_username="Jonas")
-            # Create account — should auto-assign both
-            uid = db_module.create_user("Jonas", "pw", "student")
-            rows = db_module.query_events(user_id=uid)
-            assert len(rows) == 2
-        finally:
-            db_module.DB_PATH = original_path
+        cid = db_module.upsert_computer("PC-01", "10.0.0.1")
+        # Log 2 events before account exists
+        db_module.insert_event(cid, [], os_username="Jonas")
+        db_module.insert_event(cid, [], os_username="Jonas")
+        # Create account and explicitly auto-assign historical events
+        uid = db_module.create_user("Jonas", "pw", "student")
+        db_module.auto_assign_user_events("Jonas", uid)
+        rows = db_module.query_events(user_id=uid)
+        assert len(rows) == 2

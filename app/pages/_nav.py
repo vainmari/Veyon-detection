@@ -307,24 +307,39 @@ def _notification_bell() -> None:
         badge = ui.badge("").props("floating color=red transparent")
 
     _prev = [0]
+    _computer_last_notif: dict[str, float] = {}
+    _NOTIF_COOLDOWN = 5.0  # seconds between on-screen popups per computer
 
     def _refresh_badge() -> None:
+        import time
         c = count_unread_notifications()
         badge.set_text(str(c) if c else "")
         badge.set_visibility(c > 0)
 
         if c > _prev[0]:
             new_items = list_notifications(limit=c - _prev[0])
-            for n in new_items[:3]:
+            now = time.monotonic()
+            shown = 0
+            for n in new_items:
+                computer = n['computer']
+                if now - _computer_last_notif.get(computer, 0) < _NOTIF_COOLDOWN:
+                    continue
+                _computer_last_notif[computer] = now
                 ui.notify(
                     f"🚨 {n['class_name']} detected\n"
-                    f"🖥  {n['computer']}   👤 {n['student']}\n"
+                    f"🖥  {computer}   👤 {n['student']}\n"
                     f"🕐 {n['created_at']}",
                     type="negative",
                     position="top-right",
                     timeout=8000,
                     close_button=True,
                 )
+                shown += 1
+                if shown >= 3:
+                    break
+            if not shown:
+                _prev[0] = c
+                return
             ui.run_javascript("""
                 (function(){
                   try {

@@ -290,7 +290,7 @@ def page_users() -> None:
         with client:
             notif = ui.notify(
                 t("users_deleting_bg").format(uname=username),
-                type="ongoing", spinner=True, timeout=0,
+                type="ongoing", spinner=True, timeout=5000,
             )
         try:
             await loop.run_in_executor(
@@ -300,11 +300,13 @@ def page_users() -> None:
                 None, lambda: delete_user(user_id)
             )
             with client:
-                notif.dismiss()
-                ui.notify(t("users_deleted"), type="warning")
+                if notif is not None:
+                    notif.dismiss()
+                ui.notify(t("users_deleted"), type="warning", timeout=5000)
                 _refresh()
         except Exception as ex:
             with client:
-                notif.dismiss()
-                ui.notify(t("users_delete_failed").format(e=ex), type="negative")
+                if notif is not None:
+                    notif.dismiss()
+                ui.notify(t("users_delete_failed").format(e=ex), type="negative", timeout=5000)
                 _refresh()  # re-add the row if delete failed

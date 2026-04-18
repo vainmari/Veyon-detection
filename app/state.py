@@ -47,6 +47,11 @@ training_worker: Optional["TrainingWorker"] = None
 # Reset to 0 when a frame has NO detection for that class.
 consecutive_detections: dict[tuple[str, int], int] = {}
 
+# Model ID that the current monitoring session is actually running with.
+# Set by _detect_worker after resolving the pinned/active model; cleared on stop.
+# Use this instead of get_active_model() when you need to know what's in use NOW.
+running_model_id: Optional[int] = None
+
 # Set to True when monitoring was started automatically by the schedule service.
 # The scheduler will only auto-STOP a session it started itself — it never stops
 # a session the teacher launched manually.

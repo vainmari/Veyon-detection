@@ -350,8 +350,12 @@ def page_schedules() -> None:
             rows = []
             for s in schedules:
                 n_custom = s.get("notify_class_count", 0)
-                if s.get("use_custom_notify_classes"):
-                    notify_badge = t("schedules_notify_custom_badge").format(n=n_custom)
+                if s.get("use_custom_notify_classes") and n_custom:
+                    names = [n for n in (s.get("notify_class_names") or "").split("||") if n]
+                    if len(names) <= 2:
+                        notify_badge = ", ".join(names)
+                    else:
+                        notify_badge = t("schedules_notify_n_classes").format(n=len(names))
                 else:
                     notify_badge = t("schedules_notify_global_badge")
                 rows.append({

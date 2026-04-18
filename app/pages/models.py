@@ -588,12 +588,14 @@ def _model_library() -> None:
             {"name": "actions",  "label": "",
              "field": "id",       "align": "right"},
         ]
+        running_mid = state.running_model_id  # model actually in use right now (may differ from active)
         rows = [
             {**m,
-             "map50":    f"{m['map50']:.3f}"    if m.get("map50")    else "—",
-             "map50_95": f"{m['map50_95']:.3f}" if m.get("map50_95") else "—",
+             "map50":      f"{m['map50']:.3f}"    if m.get("map50")    else "—",
+             "map50_95":   f"{m['map50_95']:.3f}" if m.get("map50_95") else "—",
              "base_model": m.get("base_model") or "—",
-             "imgsz":    m.get("imgsz") or 640}
+             "imgsz":      m.get("imgsz") or 640,
+             "is_running": m["id"] == running_mid}
             for m in models
         ]
         tbl = ui.table(columns=cols, rows=rows, row_key="id").classes("w-full")
@@ -602,7 +604,11 @@ def _model_library() -> None:
         tbl.add_slot("body-cell-active", """
             <q-td :props="props">
                 <q-icon v-if="props.row.is_active"
-                        name="check_circle" color="green" size="sm"/>
+                        name="check_circle" color="green" size="sm"
+                        title="Active model"/>
+                <q-icon v-if="props.row.is_running"
+                        name="play_circle" color="blue" size="sm"
+                        title="Currently running"/>
             </q-td>""")
         tbl.add_slot("body-cell-status", """
             <q-td :props="props">

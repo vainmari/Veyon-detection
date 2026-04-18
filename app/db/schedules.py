@@ -29,7 +29,11 @@ def list_schedules() -> list[dict]:
                g.name AS group_name,
                m.name AS model_name,
                (SELECT COUNT(*) FROM schedule_notification_class snc
-                WHERE snc.schedule_id = s.id) AS notify_class_count
+                WHERE snc.schedule_id = s.id) AS notify_class_count,
+               (SELECT GROUP_CONCAT(dc.name, '||')
+                FROM   schedule_notification_class snc
+                JOIN   detection_class dc ON dc.id = snc.class_id
+                WHERE  snc.schedule_id = s.id) AS notify_class_names
         FROM   schedule s
         LEFT JOIN computer_group g ON g.id = s.group_id
         LEFT JOIN ml_model       m ON m.id = s.model_id

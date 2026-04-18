@@ -82,6 +82,7 @@ class MonitorController:
 
     def stop(self) -> None:
         self._stop.set()
+        state.running_model_id = None
         if self._proc:
             try:
                 self._proc.terminate()
@@ -267,105 +268,113 @@ class MonitorController:
 
         model = yolo.get_model(model_path)
 
-        while not self._stop.is_set():
-            raw_batch:  list[bytes] = []
-            name_batch: list[str]   = []
+        # Publish which model is actually running so UI pages can reflect it.
+        state.running_model_id = active_model_id
 
-            try:
-                while len(raw_batch) < max_b:
-                    n, raw = self._raw_q.get(timeout=0.05)
-                    raw_batch.append(raw)
-                    name_batch.append(n)
-            except queue.Empty:
-                if not raw_batch:
+        try:
+            while not self._stop.is_set():
+                raw_batch:  list[bytes] = []
+                name_batch: list[str]   = []
+
+                try:
+                    while len(raw_batch) < max_b:
+                        n, raw = self._raw_q.get(timeout=0.05)
+                        raw_batch.append(raw)
+                        name_batch.append(n)
+                except queue.Empty:
+                    if not raw_batch:
+                        continue
+
+                # Decode all images in batch
+                imgs         = []
+                valid_names  = []
+                valid_raws   = []
+                for n, raw in zip(name_batch, raw_batch):
+                    img = veyon.decode_image(raw)
+                    if img is not None:
+                        imgs.append(img)
+                        valid_names.append(n)
+                        valid_raws.append(raw)
+
+                if not imgs:
                     continue
 
-            # Decode all images in batch
-            imgs         = []
-            valid_names  = []
-            valid_raws   = []
-            for n, raw in zip(name_batch, raw_batch):
-                img = veyon.decode_image(raw)
-                if img is not None:
-                    imgs.append(img)
-                    valid_names.append(n)
-                    valid_raws.append(raw)
-
-            if not imgs:
-                continue
-
-            try:
-                results = model(
-                    imgs,
-                    imgsz=detect_imgsz,
-                    conf=float(cfg["detect_conf"]),
-                    iou=float(cfg["detect_iou"]),
-                    verbose=False, device=device, rect=True,
-                )
-
-                # Re-fetch active model each batch in case it changed
-                if active_model_id is None:
-                    _active = get_active_model()
-                    active_model_id = _active["id"] if _active else None
-
-                for comp_name, res, img_bgr in zip(valid_names, results, imgs):
-                    annotated, dets = postprocess(
-                        res, img_bgr, bool(cfg["keep_top1"])
+                try:
+                    results = model(
+                        imgs,
+                        imgsz=detect_imgsz,
+                        conf=float(cfg["detect_conf"]),
+                        iou=float(cfg["detect_iou"]),
+                        verbose=False, device=device, rect=True,
                     )
 
-                    # Store the RAW frame so the DB always holds clean pixels.
-                    ok, buf = cv2.imencode(
-                        ".jpg", img_bgr, [cv2.IMWRITE_JPEG_QUALITY, int(cfg["img_quality"])]
-                    )
-                    frame_bytes = buf.tobytes() if ok else None
+                    # Re-fetch active model each batch in case it changed
+                    if active_model_id is None:
+                        _active = get_active_model()
+                        active_model_id = _active["id"] if _active else None
 
-                    computer_id = state.computer_ids.get(comp_name)
-                    user_id     = state.computer_users.get(comp_name)
-                    os_uname    = state.computer_os_usernames.get(comp_name)
+                    for comp_name, res, img_bgr in zip(valid_names, results, imgs):
+                        annotated, dets = postprocess(
+                            res, img_bgr, bool(cfg["keep_top1"])
+                        )
 
-                    if computer_id is not None:
-                        ev_id = insert_event(
-                            computer_id, dets,
-                            user_id=user_id,
-                            os_username=os_uname,
-                            frame_bytes=frame_bytes,
-                            model_id=active_model_id,
+                        # Store the RAW frame so the DB always holds clean pixels.
+                        ok, buf = cv2.imencode(
+                            ".jpg", img_bgr, [cv2.IMWRITE_JPEG_QUALITY, int(cfg["img_quality"])]
                         )
-                        n_fired = alert_service.check_and_fire(
-                            ev_id, dets, comp_name,
-                            model_id=active_model_id,
-                            schedule_id=self.schedule_id,
-                        )
-                        student_disp = os_uname or "—"
-                        if user_id:
-                            u = get_user_by_id(user_id)
-                            if u:
-                                student_disp = u["username"]
-                        if n_fired:
+                        frame_bytes = buf.tobytes() if ok else None
+
+                        computer_id = state.computer_ids.get(comp_name)
+                        user_id     = state.computer_users.get(comp_name)
+                        os_uname    = state.computer_os_usernames.get(comp_name)
+
+                        if computer_id is not None:
+                            ev_id = insert_event(
+                                computer_id, dets,
+                                user_id=user_id,
+                                os_username=os_uname,
+                                frame_bytes=frame_bytes,
+                                model_id=active_model_id,
+                            )
+                            n_fired = alert_service.check_and_fire(
+                                ev_id, dets, comp_name,
+                                model_id=active_model_id,
+                                schedule_id=self.schedule_id,
+                            )
+                            student_disp = os_uname or "—"
+                            if user_id:
+                                u = get_user_by_id(user_id)
+                                if u:
+                                    student_disp = u["username"]
+                            if n_fired:
+                                self._log(
+                                    f"[{comp_name}] 🔔 {n_fired} alert(s) fired "
+                                    f"({student_disp})"
+                                )
+
+                        # Push to live preview queue — drop silently if full
+                        try:
+                            state.img_q.put_nowait((comp_name, img_bgr, annotated, dets))
+                        except queue.Full:
+                            pass
+
+                        if dets:
                             self._log(
-                                f"[{comp_name}] 🔔 {n_fired} alert(s) fired "
-                                f"({student_disp})"
+                                f"[{comp_name}] " +
+                                ", ".join(
+                                    f"{d['class_name']}({d['conf']:.0%})"
+                                    for d in dets
+                                )
                             )
+                        else:
+                            self._log(f"[{comp_name}] no detections")
 
-                    # Push to live preview queue — drop silently if full
-                    try:
-                        state.img_q.put_nowait((comp_name, img_bgr, annotated, dets))
-                    except queue.Full:
-                        pass
+                except Exception as e:
+                    self._log(f"❌ Detection error: {e}")
 
-                    if dets:
-                        self._log(
-                            f"[{comp_name}] " +
-                            ", ".join(
-                                f"{d['class_name']}({d['conf']:.0%})"
-                                for d in dets
-                            )
-                        )
-                    else:
-                        self._log(f"[{comp_name}] no detections")
-
-            except Exception as e:
-                self._log(f"❌ Detection error: {e}")
+        finally:
+            # Always clear the running model so the UI stops reflecting it.
+            state.running_model_id = None
 
 
 # ── Background drain worker ───────────────────────────────────────────────────

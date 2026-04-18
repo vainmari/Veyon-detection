@@ -125,6 +125,15 @@ def delete_model(model_id: int) -> None:
     c.commit()
 
 
+def get_class_ids_for_model(model_id: int) -> list[int]:
+    """Return the detection_class IDs that belong to this model (via model_class)."""
+    c = _conn()
+    rows = c.execute(
+        "SELECT class_id FROM model_class WHERE model_id = ?", (model_id,)
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
 # ── Class sync ────────────────────────────────────────────────────────────────
 
 def sync_classes_from_model(model_id: int) -> None:

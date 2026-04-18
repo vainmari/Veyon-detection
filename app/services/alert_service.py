@@ -19,10 +19,11 @@ from app.db.database import get_prohibited_class_ids, insert_notification
 
 
 def check_and_fire(
-    event_id: int,
-    dets:     list[dict],
-    computer: str,
-    model_id: Optional[int] = None,
+    event_id:    int,
+    dets:        list[dict],
+    computer:    str,
+    model_id:    Optional[int] = None,
+    schedule_id: Optional[int] = None,
 ) -> int:
     """
     For each detection whose class_id (YOLO index) is in the prohibited set,
@@ -32,15 +33,17 @@ def check_and_fire(
 
     Parameters
     ----------
-    event_id : DB id of the detection_event that was just inserted.
-    dets     : List of detection dicts from imaging.postprocess().
-    computer : Display name of the monitored computer.
+    event_id    : DB id of the detection_event that was just inserted.
+    dets        : List of detection dicts from imaging.postprocess().
+    computer    : Display name of the monitored computer.
+    schedule_id : When set, per-schedule class overrides are applied instead of
+                  global notification_enabled flags.
 
     Returns
     -------
     Number of notifications fired this call.
     """
-    prohibited = get_prohibited_class_ids(model_id)   # {class_index: {"id": db_id, ...}}
+    prohibited = get_prohibited_class_ids(model_id, schedule_id)   # {class_index: {"id": db_id, ...}}
     if not prohibited:
         # Reset all counters for this computer when there are no rules
         for key in list(state.consecutive_detections):

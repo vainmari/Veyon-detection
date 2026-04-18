@@ -43,6 +43,8 @@ from app.db.schedules import (                                              # no
     list_schedules, list_schedules_for_group, get_schedule,
     create_schedule, update_schedule, delete_schedule,
     get_active_schedules_now, find_overlapping_schedules,
+    get_notify_class_ids_for_schedule, set_schedule_notify_classes,
+    list_schedules_using_model,
 )
 from app.db.audit import log_action, list_audit_log                        # noqa: F401
 from app.db.detection import (                                             # noqa: F401
@@ -59,7 +61,7 @@ from app.db.alerts import (                                                # noq
 from app.db.ml_models import (                                             # noqa: F401
     create_ml_model, update_ml_model, get_active_model, get_model_by_id,
     set_active_model, list_models, delete_model,
-    sync_classes_from_model,
+    sync_classes_from_model, get_class_ids_for_model,
 )
 from app.db.analytics import (                                             # noqa: F401
     get_summary_stats, get_class_distribution,

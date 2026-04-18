@@ -38,9 +38,12 @@ from app.db.database import (
     delete_model,
     get_model_by_id,
     list_models,
+    list_schedules_using_model,
     log_action,
     set_active_model,
+    sync_classes_from_model,
     update_ml_model,
+    update_schedule,
 )
 from app.pages._nav import nav
 from app.translate import t
@@ -315,6 +318,7 @@ def _model_library() -> None:
                     imp_msg.set_text(f"❌  {ex}")
                     imp_msg.classes(replace="text-sm text-red-400")
                     return
+                sync_classes_from_model(new_mid)
                 from app.core.auth import get_session_user
                 _u = get_session_user()
                 log_action("model.import", user_id=_u["id"] if _u else None,
@@ -404,6 +408,114 @@ def _model_library() -> None:
 
             ui.button(t("schedules_save"), icon="save", on_click=do_save).props("color=primary")
             ui.button(t("models_cancel"), on_click=edit_dlg.close).props("flat")
+
+    # ── Model-delete conflict dialog ──────────────────────────────────────────
+    # Opened when the model being deleted is referenced by one or more schedules.
+    del_conflict_mid   = [None]   # model id pending deletion
+    del_conflict_mname = [None]   # model name pending deletion
+
+    with ui.dialog() as del_conflict_dlg, \
+         ui.card().classes("p-5 gap-3").style("min-width:480px; max-width:95vw;"):
+        ui.label("").classes("text-lg font-bold mb-1")  # placeholder — set dynamically
+        del_conflict_title = ui.label("").classes("text-base font-semibold")
+        del_sched_list     = ui.column().classes("gap-0 pl-2")
+
+        del_action = ui.radio(
+            {
+                "reassign": t("models_del_opt_reassign"),
+                "null":     t("models_del_opt_null"),
+                "cascade":  t("models_del_opt_cascade"),
+            },
+            value="null",
+        ).props("dense")
+
+        with ui.row().classes("w-full items-center gap-3 mt-1") as reassign_row:
+            ui.label(t("models_del_target_model")).classes("text-sm w-32")
+            del_target_select = ui.select({}, value=None).props("dense outlined").classes("flex-1")
+
+        reassign_row.bind_visibility_from(del_action, "value",
+                                          backward=lambda v: v == "reassign")
+
+        def _do_confirm_delete() -> None:
+            mid   = del_conflict_mid[0]
+            mname = del_conflict_mname[0]
+            if mid is None:
+                return
+
+            action = del_action.value
+            from app.core.auth import get_session_user
+            _u = get_session_user()
+            uid = _u["id"] if _u else None
+
+            affected = list_schedules_using_model(mid)
+
+            if action == "reassign":
+                target_mid = del_target_select.value
+                if not target_mid:
+                    ui.notify("Select a target model.", type="negative")
+                    return
+                target_mid = int(target_mid)
+                target = get_model_by_id(target_mid)
+                for s in affected:
+                    update_schedule(
+                        s["id"], s["name"], s["days_of_week"],
+                        s["start_time"], s["end_time"], bool(s["is_active"]),
+                        model_id=target_mid,
+                        use_custom_notify_classes=bool(s.get("use_custom_notify_classes")),
+                    )
+                    log_action("schedule.reassign_model", user_id=uid,
+                               entity="schedule", entity_id=s["id"],
+                               detail=f"old_model={mname}, new_model={target['name'] if target else target_mid}")
+            elif action == "cascade":
+                from app.db.database import delete_schedule
+                for s in affected:
+                    delete_schedule(s["id"])
+                    log_action("schedule.cascade_delete", user_id=uid,
+                               entity="schedule", entity_id=s["id"],
+                               detail=f"deleted with model={mname}")
+
+            # "null" branch: FK ON DELETE SET NULL already handled by delete_model()
+
+            m = get_model_by_id(mid)
+            was_active = bool(m and m.get("is_active"))
+            delete_model(mid)
+            log_action("model.delete", user_id=uid, entity="ml_model", entity_id=mid,
+                       detail=f"name={mname}")
+
+            if action == "reassign":
+                target = get_model_by_id(int(del_target_select.value))
+                ui.notify(t("models_del_reassigned").format(
+                    name=target["name"] if target else "?"), type="positive")
+            elif action == "null":
+                ui.notify(t("models_del_nulled"), type="info")
+            else:
+                ui.notify(t("models_del_cascaded"), type="warning")
+
+            if was_active:
+                remaining = [
+                    r for r in list_models()
+                    if r["id"] != mid and r.get("status") == "ready"
+                ]
+                if remaining:
+                    next_m = remaining[0]
+                    set_active_model(next_m["id"])
+                    from app.config import apply_active_model
+                    apply_active_model(next_m["id"])
+                    ui.notify(
+                        t("models_promoted").format(name=next_m["name"]),
+                        type="info",
+                    )
+                else:
+                    ui.notify(t("models_no_ready"), type="warning")
+
+            del_conflict_dlg.close()
+            _model_library.refresh()
+
+        with ui.row().classes("gap-2 mt-2"):
+            ui.button(t("models_del_confirm"), icon="delete",
+                      on_click=_do_confirm_delete).props("color=red")
+            ui.button(t("models_cancel"),
+                      on_click=del_conflict_dlg.close).props("flat")
 
     # ── Classes dialog ────────────────────────────────────────────────────────
     with ui.dialog() as cls_dlg, ui.card().classes("p-4 gap-3 min-w-80"):
@@ -594,30 +706,61 @@ def _model_library() -> None:
                 return
             mid = int(mid)
             m = get_model_by_id(mid)
-            was_active = bool(m and m.get("is_active"))
-            delete_model(mid)
-            from app.core.auth import get_session_user
-            _u = get_session_user()
-            log_action("model.delete", user_id=_u["id"] if _u else None,
-                       entity="ml_model", entity_id=mid,
-                       detail=f"name={m['name'] if m else '?'}")
-            ui.notify(t("models_deleted"), type="warning")
-            if was_active:
-                remaining = [
-                    r for r in list_models()
+            if not m:
+                return
+
+            affected = list_schedules_using_model(mid)
+            if affected:
+                # Populate and open the conflict dialog
+                del_conflict_mid[0]   = mid
+                del_conflict_mname[0] = m["name"]
+                del_conflict_title.set_text(
+                    t("models_del_conflict_title") + f" — {m['name']}")
+                del_sched_list.clear()
+                with del_sched_list:
+                    ui.label(t("models_del_conflict_body")).classes(
+                        "text-sm text-gray-500 mb-1")
+                    for s in affected:
+                        ui.label(f"• {s['name']}  ({s.get('group_name') or '—'})").classes(
+                            "text-sm font-mono")
+
+                # Build reassign target options (all other ready models)
+                other_models = {
+                    str(r["id"]): r["name"]
+                    for r in list_models()
                     if r["id"] != mid and r.get("status") == "ready"
-                ]
-                if remaining:
-                    next_m = remaining[0]
-                    set_active_model(next_m["id"])
-                    apply_active_model(next_m["id"])
-                    ui.notify(
-                        t("models_promoted").format(name=next_m["name"]),
-                        type="info",
-                    )
-                else:
-                    ui.notify(t("models_no_ready"), type="warning")
-            _model_library.refresh()
+                }
+                del_target_select.options = other_models
+                del_target_select.set_value(
+                    next(iter(other_models)) if other_models else None)
+                del_action.set_value("null")
+                del_conflict_dlg.open()
+            else:
+                # No schedules affected — delete directly
+                was_active = bool(m.get("is_active"))
+                delete_model(mid)
+                from app.core.auth import get_session_user
+                _u = get_session_user()
+                log_action("model.delete", user_id=_u["id"] if _u else None,
+                           entity="ml_model", entity_id=mid,
+                           detail=f"name={m['name']}")
+                ui.notify(t("models_deleted"), type="warning")
+                if was_active:
+                    remaining = [
+                        r for r in list_models()
+                        if r["id"] != mid and r.get("status") == "ready"
+                    ]
+                    if remaining:
+                        next_m = remaining[0]
+                        set_active_model(next_m["id"])
+                        apply_active_model(next_m["id"])
+                        ui.notify(
+                            t("models_promoted").format(name=next_m["name"]),
+                            type="info",
+                        )
+                    else:
+                        ui.notify(t("models_no_ready"), type="warning")
+                _model_library.refresh()
 
         tbl.on("set_active",   on_set_active)
         tbl.on("edit_model",   on_edit_model)

@@ -77,8 +77,20 @@ def _tick() -> None:
             computers       = None if monitor_all else list(computers_map.values())
             group_label     = ", ".join(group_names) if not monitor_all else ""
 
+            # Pick the lowest-id schedule as the authoritative source for
+            # model and notification-class settings when multiple schedules
+            # are active simultaneously (different non-overlapping groups).
+            primary = min(active, key=lambda s: s["id"])
+            sched_model_id = primary.get("model_id")
+            sched_id       = primary["id"]
+
             reset_model()
-            state.monitor = MonitorController(cfg, computers=computers)
+            state.monitor = MonitorController(
+                cfg,
+                computers=computers,
+                model_id=sched_model_id,
+                schedule_id=sched_id,
+            )
             state.monitor.start()
             state.schedule_triggered   = True
             state.monitored_group_name = group_label

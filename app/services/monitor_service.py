@@ -35,6 +35,7 @@ from app.services import alert_service
 from app.db.database import (
     auto_create_student,
     get_active_model,
+    get_model_by_id,
     get_user_by_id,
     get_user_by_username,
     insert_event,
@@ -51,16 +52,23 @@ class MonitorController:
 
     def __init__(
         self,
-        cfg:       dict,
-        computers: Optional[list[dict]] = None,
+        cfg:         dict,
+        computers:   Optional[list[dict]] = None,
+        model_id:    Optional[int]        = None,
+        schedule_id: Optional[int]        = None,
     ) -> None:
         """
-        cfg       — settings dict from collect_cfg()
-        computers — optional pre-filtered list of {"name": str, "host": str}.
-                    When None the controller discovers all computers from Veyon.
+        cfg         — settings dict from collect_cfg()
+        computers   — optional pre-filtered list of {"name": str, "host": str}.
+                      When None the controller discovers all computers from Veyon.
+        model_id    — DB id of the ml_model to use; None = use active model.
+        schedule_id — DB id of the schedule that triggered this session; used to
+                      look up per-schedule notification class overrides.
         """
-        self.cfg       = cfg
-        self._computers = computers   # None = discover; list = use as-is
+        self.cfg         = cfg
+        self._computers  = computers
+        self.model_id    = model_id
+        self.schedule_id = schedule_id
         self._stop = threading.Event()
         self._proc: Optional[object] = None
         # raw_q carries (computer_name, raw_jpeg_bytes) decoded in detect worker
@@ -233,9 +241,31 @@ class MonitorController:
         device = "cuda" if torch.cuda.is_available() else "cpu"
         max_b  = 32 if device == "cuda" else 16
         self._log(f"Detection engine: {device}  |  max_batch={max_b}")
-        model = yolo.get_model(cfg["model_path"])
-        active = get_active_model()
-        active_model_id: Optional[int] = active["id"] if active else None
+
+        # Resolve which model to load: schedule-pinned > active model > cfg fallback
+        if self.model_id is not None:
+            db_m = get_model_by_id(self.model_id)
+            if db_m:
+                model_path   = db_m.get("onnx_path") or db_m.get("pt_path") or cfg["model_path"]
+                detect_imgsz = int(db_m.get("imgsz") or cfg["detect_imgsz"])
+                active_model_id: Optional[int] = db_m["id"]
+                self._log(f"Schedule model: {db_m['name']}")
+            else:
+                self._log("⚠ Scheduled model not found — falling back to active model")
+                fallback     = get_active_model()
+                model_path   = (
+                    (fallback.get("onnx_path") or fallback.get("pt_path"))
+                    if fallback else None
+                ) or cfg["model_path"]
+                detect_imgsz = int((fallback.get("imgsz") if fallback else None) or cfg["detect_imgsz"])
+                active_model_id = fallback["id"] if fallback else None
+        else:
+            model_path   = cfg["model_path"]
+            detect_imgsz = int(cfg["detect_imgsz"])
+            active       = get_active_model()
+            active_model_id = active["id"] if active else None
+
+        model = yolo.get_model(model_path)
 
         while not self._stop.is_set():
             raw_batch:  list[bytes] = []
@@ -267,7 +297,7 @@ class MonitorController:
             try:
                 results = model(
                     imgs,
-                    imgsz=cfg["detect_imgsz"],
+                    imgsz=detect_imgsz,
                     conf=float(cfg["detect_conf"]),
                     iou=float(cfg["detect_iou"]),
                     verbose=False, device=device, rect=True,
@@ -304,6 +334,7 @@ class MonitorController:
                         n_fired = alert_service.check_and_fire(
                             ev_id, dets, comp_name,
                             model_id=active_model_id,
+                            schedule_id=self.schedule_id,
                         )
                         student_disp = os_uname or "—"
                         if user_id:

@@ -598,6 +598,107 @@ def prepare_splits(analysis: dict) -> str:
     return str(new_yaml)
 
 
+# ── Fine-tune helpers ─────────────────────────────────────────────────────────
+
+def _yaml_for_base(base_model_str: str) -> Optional[str]:
+    """
+    Given a base model filename like 'yolo11n.pt', return the matching
+    architecture yaml 'yolo11n.yaml'. Returns None if not determinable.
+    """
+    if not base_model_str:
+        return None
+    stem = Path(base_model_str).stem  # e.g. 'yolo11n'
+    yaml_candidate = f"{stem}.yaml"
+    return yaml_candidate
+
+
+def remap_dataset_for_finetune(
+    analysis: dict,
+    source_names: list[str],
+    keep_new_class_indices: set,  # dataset class indices the user approved adding
+) -> tuple:
+    """
+    Remap a dataset's label files so they align with source_names + any
+    approved new classes appended at the end.
+
+    Returns (new_yaml_path, final_names_list).
+
+    Process:
+      1. Build mapping: dataset_class_index → final_class_index
+         - Matches by case-insensitive name to source_names
+         - Approved new classes appended to source_names in dataset order
+         - Non-approved new classes mapped to -1 (dropped)
+      2. Copy images and rewrite label files into data/datasets/<run>_remapped/
+      3. Write a new data.yaml with nc + names
+    """
+    dataset_names: list[str] = analysis["names"]
+    run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_dir = DATASETS_DIR / f"finetune_remapped_{run_ts}"
+
+    # Build source index lookup (case-insensitive)
+    src_lower = {n.lower(): i for i, n in enumerate(source_names)}
+
+    # Build final names list
+    final_names = list(source_names)  # start with all source classes
+    dataset_to_final: dict = {}  # dataset idx → final idx
+
+    for ds_idx, ds_name in enumerate(dataset_names):
+        src_idx = src_lower.get(ds_name.lower())
+        if src_idx is not None:
+            dataset_to_final[ds_idx] = src_idx
+        elif ds_idx in keep_new_class_indices:
+            # Append as new class
+            final_idx = len(final_names)
+            final_names.append(ds_name)
+            dataset_to_final[ds_idx] = final_idx
+        else:
+            dataset_to_final[ds_idx] = -1  # drop
+
+    # Copy images + rewrite labels for each split
+    exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+    for split, info in analysis.get("splits", {}).items():
+        img_src = Path(info["img_dir"])
+        lbl_src = Path(info["lbl_dir"])
+        out_img = out_dir / "images" / split
+        out_lbl = out_dir / "labels" / split
+        out_img.mkdir(parents=True, exist_ok=True)
+        out_lbl.mkdir(parents=True, exist_ok=True)
+
+        for img_file in img_src.rglob("*"):
+            if img_file.suffix.lower() in exts:
+                shutil.copy2(img_file, out_img / img_file.name)
+
+        for lbl_file in lbl_src.rglob("*.txt"):
+            new_lines = []
+            for line in lbl_file.read_text(errors="ignore").splitlines():
+                parts = line.strip().split()
+                if not parts:
+                    continue
+                try:
+                    ds_cls = int(parts[0])
+                except ValueError:
+                    continue
+                final_cls = dataset_to_final.get(ds_cls, -1)
+                if final_cls >= 0:
+                    new_lines.append(f"{final_cls} " + " ".join(parts[1:]))
+            (out_lbl / lbl_file.name).write_text("\n".join(new_lines), encoding="utf-8")
+
+    # Write data.yaml
+    yaml_data = {
+        "path":  str(out_dir),
+        "train": "images/train",
+        "val":   "images/val",
+        "test":  "images/test",
+        "nc":    len(final_names),
+        "names": final_names,
+    }
+    new_yaml = out_dir / "data.yaml"
+    with open(new_yaml, "w", encoding="utf-8") as f:
+        yaml.dump(yaml_data, f, allow_unicode=True)
+
+    return str(new_yaml), final_names
+
+
 # ── Training worker ───────────────────────────────────────────────────────────
 
 class TrainingWorker:
@@ -681,10 +782,35 @@ class TrainingWorker:
         run_name = cfg["run_name"]
         MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
-        self._push_status(f"Loading base model  {cfg['base_model']} …")
+        source_pt = cfg.get("source_pt_path")
+        if source_pt:
+            source_nc = cfg.get("source_model_nc", cfg["nc"])
+            if source_nc == cfg["nc"]:
+                # Scenario A — same class count, direct fine-tune
+                self._push_status(f"Loading source model for fine-tuning: {source_pt} …")
+            else:
+                # Scenario B — different class count, rebuild head, load backbone
+                base_yaml = _yaml_for_base(cfg.get("source_base_model", ""))
+                if not base_yaml:
+                    self.progress_q.put({"type": "error",
+                        "message": "Cannot fine-tune: source model has unknown architecture. "
+                                   "Only models trained from known YOLO bases support class extension."})
+                    return
+                self._push_status(f"Rebuilding model head ({source_nc} → {cfg['nc']} classes) …")
+        else:
+            self._push_status(f"Loading base model  {cfg['base_model']} …")
 
         try:
-            model = YOLO(cfg["base_model"])
+            source_pt = cfg.get("source_pt_path")
+            if source_pt:
+                source_nc = cfg.get("source_model_nc", cfg["nc"])
+                if source_nc == cfg["nc"]:
+                    model = YOLO(source_pt)
+                else:
+                    base_yaml = _yaml_for_base(cfg.get("source_base_model", ""))
+                    model = YOLO(base_yaml).load(source_pt)
+            else:
+                model = YOLO(cfg["base_model"])
 
             # Per-batch progress (stored in attrs, not queue)
             _batch_idx    = [0]
@@ -761,7 +887,7 @@ class TrainingWorker:
 
             self._push_status(f"Training on {device}  ({cfg['epochs']} epochs) …")
 
-            results = model.train(
+            train_kwargs = dict(
                 data     = cfg["yaml_path"],
                 epochs   = cfg["epochs"],
                 imgsz    = cfg["imgsz"],
@@ -772,6 +898,12 @@ class TrainingWorker:
                 exist_ok = True,
                 verbose  = False,
             )
+            if cfg.get("learning_rate"):
+                train_kwargs["lr0"] = float(cfg["learning_rate"])
+            if cfg.get("freeze_backbone"):
+                train_kwargs["freeze"] = 10
+
+            results = model.train(**train_kwargs)
 
             if not self.is_running:
                 self.progress_q.put({"type": "cancelled"})
@@ -789,22 +921,25 @@ class TrainingWorker:
 
             from app.db.database import create_ml_model
             model_id = create_ml_model(
-                name         = run_name,
-                nc           = cfg["nc"],
-                class_names  = cfg["names"],
-                pt_path      = pt_p,
-                onnx_path    = str(onnx_path),
-                map50        = m50,
-                map50_95     = m5095,
-                precision    = prec,
-                recall       = rec,
-                status       = "ready",
-                imgsz        = cfg["imgsz"],
-                dataset_path = cfg["yaml_path"],
-                base_model   = cfg["base_model"],
-                epochs       = cfg["epochs"],
-                batch        = cfg["batch"],
-                device       = device,
+                name            = run_name,
+                nc              = cfg["nc"],
+                class_names     = cfg["names"],
+                pt_path         = pt_p,
+                onnx_path       = str(onnx_path),
+                map50           = m50,
+                map50_95        = m5095,
+                precision       = prec,
+                recall          = rec,
+                status          = "ready",
+                imgsz           = cfg["imgsz"],
+                dataset_path    = cfg["yaml_path"],
+                base_model      = cfg.get("base_model") or cfg.get("source_base_model"),
+                epochs          = cfg["epochs"],
+                batch           = cfg["batch"],
+                device          = device,
+                parent_model_id = cfg.get("source_model_id"),
+                finetune_lr     = cfg.get("learning_rate"),
+                finetune_frozen = 10 if cfg.get("freeze_backbone") else None,
             )
 
             self.progress_q.put({

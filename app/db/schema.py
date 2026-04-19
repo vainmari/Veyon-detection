@@ -353,6 +353,23 @@ def _migrate(c: sqlite3.Connection) -> None:
         )
         c.commit()
 
+    # 17. ml_model: fine-tune provenance columns
+    #     parent_model_id — the model that was used as the starting checkpoint
+    #     finetune_lr     — learning rate override used during fine-tuning (NULL = default)
+    #     finetune_frozen — number of backbone layers frozen (NULL = none frozen)
+    if _table_exists(c, "ml_model"):
+        cols = _cols(c, "ml_model")
+        if "parent_model_id" not in cols:
+            c.execute(
+                "ALTER TABLE ml_model ADD COLUMN parent_model_id INTEGER "
+                "REFERENCES ml_model(id) ON DELETE SET NULL"
+            )
+        if "finetune_lr" not in cols:
+            c.execute("ALTER TABLE ml_model ADD COLUMN finetune_lr REAL")
+        if "finetune_frozen" not in cols:
+            c.execute("ALTER TABLE ml_model ADD COLUMN finetune_frozen INTEGER")
+        c.commit()
+
     # 7. notification: remove redundant computer/student TEXT columns.
     #    These are now derived via JOINs through event_id.
     if _table_exists(c, "notification") and "computer" in _cols(c, "notification"):
@@ -539,27 +556,31 @@ def init_db() -> None:
         -- ml models ───────────────────────────────────────────────────────────
         -- Training config (dataset_path, base_model, epochs, batch, device)
         -- is stored directly here — no separate training_session table.
+        -- Fine-tune provenance: parent_model_id, finetune_lr, finetune_frozen
         CREATE TABLE IF NOT EXISTS ml_model (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            name         TEXT    NOT NULL UNIQUE,
-            pt_path      TEXT,
-            onnx_path    TEXT,
-            nc           INTEGER NOT NULL,
-            classes_json TEXT    NOT NULL,
-            imgsz        INTEGER NOT NULL DEFAULT 640,
-            map50        REAL,
-            map50_95     REAL,
-            precision    REAL,
-            recall       REAL,
-            is_active    INTEGER NOT NULL DEFAULT 0,
-            status       TEXT    NOT NULL DEFAULT 'ready',
-            dataset_path TEXT,
-            base_model   TEXT,
-            epochs       INTEGER,
-            batch        INTEGER,
-            device       TEXT,
-            created_at   TEXT    NOT NULL,
-            finished_at  TEXT
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            name            TEXT    NOT NULL UNIQUE,
+            pt_path         TEXT,
+            onnx_path       TEXT,
+            nc              INTEGER NOT NULL,
+            classes_json    TEXT    NOT NULL,
+            imgsz           INTEGER NOT NULL DEFAULT 640,
+            map50           REAL,
+            map50_95        REAL,
+            precision       REAL,
+            recall          REAL,
+            is_active       INTEGER NOT NULL DEFAULT 0,
+            status          TEXT    NOT NULL DEFAULT 'ready',
+            dataset_path    TEXT,
+            base_model      TEXT,
+            epochs          INTEGER,
+            batch           INTEGER,
+            device          TEXT,
+            parent_model_id INTEGER REFERENCES ml_model(id) ON DELETE SET NULL,
+            finetune_lr     REAL,
+            finetune_frozen INTEGER,
+            created_at      TEXT    NOT NULL,
+            finished_at     TEXT
         );
 
         -- model → class index mapping ─────────────────────────────────────────

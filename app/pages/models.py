@@ -56,6 +56,7 @@ from app.services.training_service import (
     get_torch_info,
     install_cuda_torch,
     prepare_splits,
+    remap_dataset_for_finetune,
 )
 
 
@@ -551,6 +552,320 @@ def _model_library() -> None:
         hist_table.props("dense flat bordered")
         ui.button(t("models_close"), on_click=hist_dlg.close).props("flat dense")
 
+    # ── Fine-tune dialog ──────────────────────────────────────────────────────
+    ft_dlg_source: list = [None]   # holds the source model dict
+    ft_ws: dict = {"step": "upload", "analysis": None, "yaml_path": None,
+                   "model_id": None, "new_class_indices": set()}
+
+    with ui.dialog() as ft_dlg, \
+         ui.card().classes("p-5").style(
+             "min-width:820px; max-width:96vw; max-height:90vh; overflow-y:auto;"
+         ):
+
+        @ui.refreshable
+        def _ft_wizard_body() -> None:
+            src = ft_dlg_source[0]
+            if src is None:
+                return
+            step = ft_ws["step"]
+
+            if step == "upload":
+                # ── FT Step 1: Upload dataset ─────────────────────────────────
+                ui.label(t("models_ft_title")).classes("text-lg font-bold mb-1")
+
+                with ui.card().classes(
+                    "w-full bg-gray-100 dark:bg-gray-800 px-4 py-3 mb-3"
+                ):
+                    ui.label(t("models_ft_source_label")).classes(
+                        "text-xs text-gray-500 mb-1")
+                    with ui.row().classes("gap-4 flex-wrap"):
+                        for lbl, val in [
+                            (t("models_ft_source_name"), src.get("name", "—")),
+                            (t("models_ft_source_classes"),
+                             str(src.get("nc", "—"))),
+                            (t("models_ft_source_base"),
+                             src.get("base_model") or "—"),
+                            ("imgsz", str(src.get("imgsz") or 640)),
+                        ]:
+                            with ui.column().classes("gap-0"):
+                                ui.label(lbl).classes(
+                                    "text-xs text-gray-500")
+                                ui.label(val).classes(
+                                    "text-sm font-mono font-semibold")
+
+                ui.label(t("models_step1_title")).classes(
+                    "text-base font-semibold mb-1 mt-2")
+                ui.markdown(t("models_step1_intro")).classes(
+                    "text-sm text-gray-400 mb-3")
+
+                ft_msg = ui.label("").classes("text-sm")
+                ft_upload_ref = {"data": None, "name": ""}
+
+                with ui.card().classes(
+                    "w-full bg-gray-50 border border-dashed border-gray-300 "
+                    "dark:bg-gray-800 dark:border-gray-500"
+                ):
+                    ui.label(t("models_step1_opt_upload")).classes(
+                        "text-xs text-gray-500 dark:text-gray-400 mb-2")
+
+                    async def _ft_handle_upload(
+                        e: events.UploadEventArguments,
+                    ) -> None:
+                        raw  = await e.file.read()
+                        name = getattr(e, "name", "upload.zip")
+                        ft_upload_ref["data"] = raw
+                        ft_upload_ref["name"] = name
+                        ft_msg.set_text(
+                            f"✅  {name}  ({len(raw)//1024} KB loaded)")
+                        ft_msg.classes(replace="text-sm text-green-400")
+
+                    ui.upload(
+                        label=t("models_step1_drop"),
+                        on_upload=_ft_handle_upload,
+                        auto_upload=True,
+                    ).props("accept=.zip flat").classes("w-full")
+
+                ui.label(t("models_or")).classes(
+                    "text-center text-gray-500 text-sm my-1")
+
+                with ui.card().classes("w-full bg-gray-50 dark:bg-gray-800"):
+                    ui.label(t("models_step1_opt_path")).classes(
+                        "text-xs text-gray-500 dark:text-gray-400 mb-1")
+                    ft_path_input = ui.input(
+                        placeholder="e.g. C:/datasets/my_dataset"
+                    ).props("dense outlined").classes("w-full")
+
+                async def _ft_do_analyze() -> None:
+                    ft_msg.set_text(t("models_step1_analysing"))
+                    ft_msg.classes(replace="text-sm text-yellow-400")
+                    if ft_upload_ref["data"]:
+                        ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        dest = DATASETS_DIR / ts
+                        def _work():
+                            d = extract_zip(ft_upload_ref["data"], dest)
+                            return str(d), analyze_dataset(str(d))
+                        _, result = await asyncio.get_event_loop().run_in_executor(
+                            None, _work)
+                    elif ft_path_input.value.strip():
+                        result = await asyncio.get_event_loop().run_in_executor(
+                            None, analyze_dataset, ft_path_input.value.strip())
+                    else:
+                        ft_msg.set_text(t("models_step1_no_input"))
+                        ft_msg.classes(replace="text-sm text-red-400")
+                        return
+                    if not result["ok"]:
+                        ft_msg.set_text(f"❌  {result['error']}")
+                        ft_msg.classes(replace="text-sm text-red-400")
+                        return
+                    ft_ws["analysis"] = result
+                    ft_ws["step"]     = "reconcile"
+                    _ft_wizard_body.refresh()
+
+                with ui.row().classes("gap-2 mt-3"):
+                    ui.button(t("models_step1_analyse"),
+                              on_click=_ft_do_analyze).props("color=primary")
+                    ui.button(t("models_cancel"),
+                              on_click=ft_dlg.close).props("flat")
+
+            elif step == "reconcile":
+                # ── FT Step 2: Class reconciliation + config ──────────────────
+                a = ft_ws["analysis"]
+                src = ft_dlg_source[0]
+                source_names: list[str] = src.get("class_names") or []
+
+                ui.label(t("models_ft_step2_title")).classes(
+                    "text-base font-semibold mb-2")
+
+                with ui.row().classes("gap-4 flex-wrap mb-3"):
+                    for lbl, val in [
+                        (t("models_step2_total_images"), str(a["total_images"])),
+                        (t("models_step2_classes"),      str(a["nc"])),
+                        (t("models_step2_splits_found"), ", ".join(a["splits"].keys()) or "—"),
+                    ]:
+                        with ui.card().classes("bg-gray-800 px-4 py-3 min-w-36"):
+                            ui.label(lbl).classes("text-xs text-gray-400")
+                            ui.label(val).classes(
+                                "text-xl font-bold text-blue-300")
+
+                # Class reconciliation table
+                ui.label(t("models_ft_reconcile_title")).classes(
+                    "text-sm font-semibold text-gray-600 dark:text-gray-400 mt-2 mb-1")
+                ui.label(t("models_ft_reconcile_hint")).classes(
+                    "text-xs text-gray-500 mb-2")
+
+                src_lower = {n.lower(): n for n in source_names}
+                new_class_checks: dict = {}  # ds_idx → checkbox element
+
+                with ui.element("table").classes(
+                    "w-full text-sm border-collapse"
+                ):
+                    with ui.element("thead"):
+                        with ui.element("tr").classes("text-left text-gray-400"):
+                            for h in [
+                                t("models_ft_col_ds_class"),
+                                t("models_ft_col_mapping"),
+                                t("models_ft_col_include"),
+                            ]:
+                                with ui.element("th").classes(
+                                    "px-2 py-1 border-b border-gray-700"
+                                ):
+                                    ui.label(h)
+                    with ui.element("tbody"):
+                        for ds_idx, ds_name in enumerate(a["names"]):
+                            matched = src_lower.get(ds_name.lower())
+                            with ui.element("tr").classes(
+                                "border-b border-gray-800"
+                            ):
+                                with ui.element("td").classes(
+                                    "px-2 py-1 font-mono"
+                                ):
+                                    ui.label(f"{ds_idx}  {ds_name}")
+                                if matched is not None:
+                                    with ui.element("td").classes(
+                                        "px-2 py-1 text-green-400"
+                                    ):
+                                        ui.label(f"→ {matched}")
+                                    ui.element("td").classes("px-2 py-1")
+                                else:
+                                    with ui.element("td").classes(
+                                        "px-2 py-1 text-orange-400"
+                                    ):
+                                        ui.label(t("models_ft_new_class"))
+                                    with ui.element("td").classes("px-2 py-1"):
+                                        chk = ui.checkbox(
+                                            t("models_ft_add"), value=True
+                                        ).props("dense")
+                                        new_class_checks[ds_idx] = chk
+
+                if a.get("warnings"):
+                    with ui.card().classes(
+                        "w-full bg-yellow-50 border border-yellow-300 "
+                        "dark:bg-yellow-950 dark:border-yellow-700 mt-2"
+                    ):
+                        for w in a["warnings"]:
+                            ui.label(w).classes(
+                                "text-sm text-yellow-800 dark:text-yellow-200")
+
+                # Training config
+                ui.label(t("models_step2_train_cfg")).classes(
+                    "text-sm font-semibold text-gray-600 dark:text-gray-400 mt-4 mb-2")
+
+                with ui.card().classes("w-full max-w-xl"):
+                    with ui.row().classes("w-full items-center gap-4 py-1"):
+                        ui.label(t("models_step2_run_name")).classes(
+                            "w-44 text-sm")
+                        ft_f_name = ui.input(
+                            value=f"finetune_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                        ).props("dense outlined").classes("flex-1")
+                    with ui.row().classes("w-full items-center gap-4 py-1"):
+                        ui.label(t("models_step2_epochs")).classes(
+                            "w-44 text-sm")
+                        ft_f_epochs = ui.number(
+                            value=30, min=1, max=1000
+                        ).props("dense outlined").classes("w-32")
+                    with ui.row().classes("w-full items-center gap-4 py-1"):
+                        ui.label(t("models_step2_image_size")).classes(
+                            "w-44 text-sm")
+                        ft_f_imgsz = ui.select(
+                            [320, 480, 640, 1280],
+                            value=src.get("imgsz") or 640,
+                        ).props("dense outlined").classes("w-32")
+                    with ui.row().classes("w-full items-center gap-4 py-1"):
+                        ui.label(t("models_step2_batch")).classes(
+                            "w-44 text-sm")
+                        ft_f_batch = ui.number(
+                            value=16, min=-1, max=256
+                        ).props("dense outlined").classes("w-32")
+                    with ui.row().classes("w-full items-center gap-4 py-1"):
+                        ui.label(t("models_ft_lr")).classes("w-44 text-sm")
+                        ft_f_lr = ui.number(
+                            value=0.001, min=0.0, max=1.0,
+                            step=0.0001, format="%.4f",
+                        ).props("dense outlined").classes("w-32")
+                        ui.label(t("models_ft_lr_hint")).classes(
+                            "text-xs text-gray-500")
+                    with ui.row().classes("w-full items-center gap-4 py-1"):
+                        ui.label(t("models_ft_freeze")).classes("w-44 text-sm")
+                        ft_f_freeze = ui.checkbox(
+                            t("models_ft_freeze_hint"), value=True
+                        ).props("dense")
+
+                with ui.row().classes("gap-3 mt-4"):
+                    ui.button(t("models_step2_back"), on_click=lambda: (
+                        ft_ws.__setitem__("step", "upload"),
+                        _ft_wizard_body.refresh(),
+                    )).props("flat")
+
+                    async def _ft_do_start() -> None:
+                        src = ft_dlg_source[0]
+                        a   = ft_ws["analysis"]
+
+                        # Collect approved new class indices
+                        keep = {
+                            idx for idx, chk in new_class_checks.items()
+                            if chk.value
+                        }
+                        ft_ws["new_class_indices"] = keep
+
+                        # Remap dataset
+                        source_names_list = src.get("class_names") or []
+                        try:
+                            new_yaml, final_names = (
+                                await asyncio.get_event_loop().run_in_executor(
+                                    None,
+                                    remap_dataset_for_finetune,
+                                    a, source_names_list, keep,
+                                )
+                            )
+                        except Exception as exc:
+                            ui.notify(f"Dataset remapping failed: {exc}",
+                                      type="negative")
+                            return
+
+                        ft_ws["yaml_path"] = new_yaml
+
+                        config = {
+                            "yaml_path":        new_yaml,
+                            "nc":               len(final_names),
+                            "names":            final_names,
+                            "base_model":       src.get("base_model") or "",
+                            "source_pt_path":   src.get("pt_path"),
+                            "source_model_id":  src["id"],
+                            "source_model_nc":  src.get("nc", len(final_names)),
+                            "source_base_model": src.get("base_model") or "",
+                            "epochs":           int(ft_f_epochs.value),
+                            "imgsz":            int(ft_f_imgsz.value),
+                            "batch":            int(ft_f_batch.value),
+                            "run_name": (
+                                ft_f_name.value.strip() or
+                                f"finetune_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                            ),
+                            "learning_rate":    float(ft_f_lr.value or 0) or None,
+                            "freeze_backbone":  bool(ft_f_freeze.value),
+                        }
+                        worker = TrainingWorker()
+                        worker.start(config)
+                        state.training_worker = worker
+                        ft_ws["step"] = "training"
+                        _ft_wizard_body.refresh()
+
+                    ui.button(t("models_ft_start"),
+                              on_click=_ft_do_start).props("color=purple")
+
+            elif step == "training":
+                # ── FT Step 3: Live training (reuse existing step) ────────────
+                ui.label(t("models_ft_training_title")).classes(
+                    "text-base font-semibold mb-2")
+                _step_training(ft_ws, _ft_wizard_body)
+
+            elif step == "done":
+                # ── FT Step 4: Done ───────────────────────────────────────────
+                _step_done(ft_ws, _ft_wizard_body)
+                ui.button(t("models_cancel"), on_click=ft_dlg.close).props(
+                    "flat")
+
+        _ft_wizard_body()
+
     # ── Library card ──────────────────────────────────────────────────────────
     with ui.card().classes("w-full"):
         with ui.row().classes("items-center justify-between mb-2"):
@@ -595,7 +910,8 @@ def _model_library() -> None:
              "map50_95":   f"{m['map50_95']:.3f}" if m.get("map50_95") else "—",
              "base_model": m.get("base_model") or "—",
              "imgsz":      m.get("imgsz") or 640,
-             "is_running": m["id"] == running_mid}
+             "is_running": m["id"] == running_mid,
+             "has_pt":     bool(m.get("pt_path"))}
             for m in models
         ]
         tbl = ui.table(columns=cols, rows=rows, row_key="id").classes("w-full")
@@ -631,6 +947,10 @@ def _model_library() -> None:
                 <q-btn flat dense round icon="edit" color="blue"
                        title="Edit"
                        @click="$parent.$emit('edit_model', props.row)"/>
+                <q-btn flat dense round icon="auto_fix_high" color="purple"
+                       title="Fine-tune from this model"
+                       :disable="!props.row.has_pt"
+                       @click="$parent.$emit('finetune', props.row)"/>
                 <q-btn flat dense round icon="history" color="teal"
                        title="Training history"
                        @click="$parent.$emit('show_history', props.row)"/>
@@ -768,11 +1088,29 @@ def _model_library() -> None:
                         ui.notify(t("models_no_ready"), type="warning")
                 _model_library.refresh()
 
+        def on_finetune(e) -> None:
+            mid = e.args.get("id")
+            if not mid:
+                return
+            m = get_model_by_id(int(mid))
+            if not m or not m.get("pt_path"):
+                ui.notify(t("models_ft_no_pt"), type="negative")
+                return
+            ft_dlg_source[0] = m
+            ft_ws.update({
+                "step": "upload", "analysis": None,
+                "yaml_path": None, "model_id": None,
+                "new_class_indices": set(),
+            })
+            _ft_wizard_body.refresh()
+            ft_dlg.open()
+
         tbl.on("set_active",   on_set_active)
         tbl.on("edit_model",   on_edit_model)
         tbl.on("show_classes", on_show_classes)
         tbl.on("show_history", on_show_history)
         tbl.on("del_model",    on_delete)
+        tbl.on("finetune",     on_finetune)
 
 
 # ── Training wizard ───────────────────────────────────────────────────────────

@@ -30,11 +30,14 @@ def create_ml_model(
     recall:      float           = 0.0,
     status:      str             = "ready",
     imgsz:       int             = 640,
-    dataset_path: Optional[str] = None,
-    base_model:   Optional[str] = None,
-    epochs:       Optional[int] = None,
-    batch:        Optional[int] = None,
-    device:       Optional[str] = None,
+    dataset_path:    Optional[str]   = None,
+    base_model:      Optional[str]   = None,
+    epochs:          Optional[int]   = None,
+    batch:           Optional[int]   = None,
+    device:          Optional[str]   = None,
+    parent_model_id: Optional[int]   = None,
+    finetune_lr:     Optional[float] = None,
+    finetune_frozen: Optional[int]   = None,
 ) -> int:
     c = _conn()
     now = _now()
@@ -43,13 +46,15 @@ def create_ml_model(
         "(name, pt_path, onnx_path, nc, classes_json, map50, map50_95, "
         " precision, recall, status, imgsz, "
         " dataset_path, base_model, epochs, batch, device, "
+        " parent_model_id, finetune_lr, finetune_frozen, "
         " created_at, finished_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (name, pt_path, onnx_path, nc,
          json.dumps(class_names),
          map50, map50_95, precision, recall,
          status, imgsz,
          dataset_path, base_model, epochs, batch, device,
+         parent_model_id, finetune_lr, finetune_frozen,
          now, now),
     )
     c.commit()

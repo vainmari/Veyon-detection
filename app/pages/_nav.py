@@ -196,7 +196,8 @@ def _user_menu(current_user: dict, dark) -> None:
             ui.button(t("pwd_save"),   on_click=do_change).props("color=primary dense")
             ui.button(t("pwd_cancel"), on_click=pwd_dlg.close).props("flat dense")
 
-    label_text = f"{current_user['username']}  ({role})"
+    role_label = t(f"users_role_{role}")
+    label_text = f"{current_user['username']}  ({role_label})"
     with ui.dropdown_button(
         label_text, icon="account_circle",
     ).props("flat no-caps dense color=white"):

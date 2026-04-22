@@ -143,6 +143,10 @@ def page_analytics() -> None:
     def _refresh() -> None:
         fd  = f_from.value or ""
         td  = f_to.value   or ""
+        # Reject inverted ranges — don't filter, just tell the user.
+        if fd and td and fd > td:
+            ui.notify(t("analytics_err_date_range"), type="negative")
+            return
         cid = int(f_computer.value) if is_teacher and f_computer.value else None
         uid = int(f_student.value)  if is_teacher and f_student.value  else None
         if not is_teacher:

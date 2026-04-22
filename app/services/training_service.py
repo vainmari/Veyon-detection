@@ -701,6 +701,11 @@ def remap_dataset_for_finetune(
 
 # ── Training worker ───────────────────────────────────────────────────────────
 
+
+class _TrainingCancelled(Exception):
+    """Raised from a training callback to abort the blocking model.train() call."""
+
+
 class TrainingWorker:
     """
     Runs YOLO fine-tuning in a daemon thread.
@@ -742,12 +747,22 @@ class TrainingWorker:
         self._thread.start()
 
     def cancel(self) -> None:
+        """
+        Request the background training thread to stop.
+
+        Sets is_running=False so the per-batch callback in _run() can detect
+        the cancellation and raise _TrainingCancelled to break out of the
+        blocking model.train() call. Also sets every known Ultralytics
+        "please stop" flag on the trainer if we already have one — covers the
+        case where cancellation comes between epochs (callback not firing).
+        """
         self.is_running = False
         if self._trainer is not None:
-            try:
-                self._trainer.stop = True
-            except Exception:
-                pass
+            for attr in ("stop_training", "stop"):
+                try:
+                    setattr(self._trainer, attr, True)
+                except Exception:
+                    pass
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
@@ -819,14 +834,35 @@ class TrainingWorker:
             _batch_idx    = [0]
             _total_batches = [0]
 
+            def _signal_stop(trainer) -> None:
+                """Flip every known Ultralytics 'please stop' flag."""
+                for attr in ("stop_training", "stop"):
+                    try:
+                        setattr(trainer, attr, True)
+                    except Exception:
+                        pass
+
+            def _on_train_start(trainer) -> None:
+                # Capture the trainer handle as early as possible so cancel()
+                # can signal even before the first epoch finishes.
+                self._trainer = trainer
+                if not self.is_running:
+                    _signal_stop(trainer)
+                    raise _TrainingCancelled()
+
             def _on_epoch_start(trainer) -> None:
+                self._trainer = trainer
                 _batch_idx[0] = 0
                 try:
                     _total_batches[0] = len(trainer.train_loader)
                 except Exception:
                     pass
+                if not self.is_running:
+                    _signal_stop(trainer)
+                    raise _TrainingCancelled()
 
             def _on_batch_end(trainer) -> None:
+                self._trainer = trainer
                 _batch_idx[0] += 1
                 self._update_batch(
                     batch       = _batch_idx[0],
@@ -834,6 +870,11 @@ class TrainingWorker:
                     epoch       = int(trainer.epoch) + 1,
                     total_epochs = int(trainer.epochs),
                 )
+                # Check cancellation on every batch — this is the fastest path
+                # out of the blocking model.train() call.
+                if not self.is_running:
+                    _signal_stop(trainer)
+                    raise _TrainingCancelled()
 
             def _on_fit_epoch_end(trainer) -> None:
                 """
@@ -884,6 +925,7 @@ class TrainingWorker:
                     "dfl_loss":  dfl_loss,
                 })
 
+            model.add_callback("on_train_start",       _on_train_start)
             model.add_callback("on_train_epoch_start", _on_epoch_start)
             model.add_callback("on_train_batch_end",   _on_batch_end)
             model.add_callback("on_fit_epoch_end",     _on_fit_epoch_end)
@@ -956,9 +998,16 @@ class TrainingWorker:
                 "recall":    rec,
             })
 
+        except _TrainingCancelled:
+            self.progress_q.put({"type": "cancelled"})
         except Exception as exc:
-            self.error_message = str(exc)
-            self.progress_q.put({"type": "error", "message": str(exc)})
+            # Ultralytics sometimes wraps our sentinel in another exception
+            # when the batch callback raises — detect that case by message.
+            if "_TrainingCancelled" in repr(exc) or not self.is_running:
+                self.progress_q.put({"type": "cancelled"})
+            else:
+                self.error_message = str(exc)
+                self.progress_q.put({"type": "error", "message": str(exc)})
         finally:
             self.is_running = False
             self.is_done    = True

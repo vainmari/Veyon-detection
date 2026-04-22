@@ -261,14 +261,29 @@ def _model_library() -> None:
                 auto_upload=True,
             ).props("accept=.onnx,.pt flat").classes("w-full")
 
-        ui.label(t("models_or")).classes("text-center text-gray-500 text-xs my-1")
+        from app.core.auth import get_session_user as _gsu_import
+        _cu_import = _gsu_import()
+        _is_admin_import = bool(_cu_import and _cu_import.get("role") == "admin")
+        imp_path = None   # only set for admins below
 
-        with ui.card().classes("w-full bg-gray-50 dark:bg-gray-800"):
-            ui.label(t("models_opt_path")).classes(
-                "text-xs text-gray-500 dark:text-gray-400 mb-1")
-            imp_path = ui.input(
-                placeholder="e.g. weights/ONNX_FP32.onnx"
-            ).props("dense outlined").classes("w-full")
+        if _is_admin_import:
+            ui.label(t("models_or")).classes(
+                "text-center text-gray-500 text-xs my-1")
+            with ui.card().classes(
+                "w-full bg-gray-50 dark:bg-gray-800 "
+                "border border-orange-300 dark:border-orange-700"
+            ):
+                with ui.row().classes("items-center gap-2 mb-1"):
+                    ui.icon("warning", size="xs").classes("text-orange-500")
+                    ui.label(t("models_path_admin_only")).classes(
+                        "text-xs font-semibold text-orange-600 dark:text-orange-300")
+                ui.label(t("models_path_server_warning")).classes(
+                    "text-xs text-orange-500 dark:text-orange-400 mb-2")
+                ui.label(t("models_opt_path")).classes(
+                    "text-xs text-gray-500 dark:text-gray-400 mb-1")
+                imp_path = ui.input(
+                    placeholder="e.g. weights/ONNX_FP32.onnx"
+                ).props("dense outlined").classes("w-full")
 
         ui.separator().classes("my-2")
 
@@ -318,7 +333,7 @@ def _model_library() -> None:
                     dst = IMPORTED_DIR / imp_file["name"]
                     dst.write_bytes(imp_file["data"])
                     onnx_path = str(dst)
-                elif imp_path.value.strip():
+                elif imp_path is not None and imp_path.value.strip():
                     p = Path(imp_path.value.strip())
                     if not p.exists():
                         imp_msg.set_text(f"❌  Not found: {p}")

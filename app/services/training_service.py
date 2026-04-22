@@ -721,12 +721,15 @@ class TrainingWorker:
         self.config:       dict = {}
 
         # Persistent across page navigation
-        self.epoch_history:  list[dict] = []
-        self.current_status: str        = "Initializing…"
-        self.batch_progress: dict       = {
+        self.epoch_history:   list[dict]    = []
+        self.current_status:  str           = "Initializing…"
+        self.batch_progress:  dict          = {
             "batch": 0, "total_batches": 0,
             "epoch": 0, "total_epochs":  0,
         }
+        # Set when training finishes — readable by inline UI without draining queue
+        self.result_model_id: Optional[int] = None
+        self.error_message:   Optional[str] = None
 
     # ── Public ────────────────────────────────────────────────────────────────
 
@@ -942,6 +945,7 @@ class TrainingWorker:
                 finetune_frozen = 10 if cfg.get("freeze_backbone") else None,
             )
 
+            self.result_model_id = model_id   # readable by inline UI without queue
             self.progress_q.put({
                 "type":      "done",
                 "model_id":  model_id,
@@ -953,6 +957,7 @@ class TrainingWorker:
             })
 
         except Exception as exc:
+            self.error_message = str(exc)
             self.progress_q.put({"type": "error", "message": str(exc)})
         finally:
             self.is_running = False

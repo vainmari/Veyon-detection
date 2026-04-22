@@ -67,13 +67,55 @@ def page_models() -> None:
         return
     nav(current)
 
+    # ── Page-level inline training state ──────────────────────────────────────
+    # Shared across dialog (setup) and inline section (progress/done).
+    # The dialog handles upload→analysis→config; once training starts the dialog
+    # closes and this inline section takes over for all users navigating here.
+    inline_ws: dict = {"step": "idle", "model_id": None}
+
+    _w = state.training_worker
+    if _w:
+        if _w.is_running:
+            inline_ws["step"] = "training"
+        elif _w.is_done and _w.result_model_id:
+            inline_ws["step"] = "done"
+            inline_ws["model_id"] = _w.result_model_id
+
+    @ui.refreshable
+    def inline_training() -> None:
+        s = inline_ws["step"]
+        if s == "idle":
+            return   # nothing shown while no training
+        with ui.card().classes("w-full"):
+            with ui.row().classes("items-center gap-3 mb-2"):
+                ui.label(t("models_train_title")).classes("text-lg font-bold")
+                if s == "training":
+                    ui.badge(t("models_step3_title"),
+                             color="green").props("rounded")
+            if s == "training":
+                _inline_step_training(inline_ws, inline_training)
+            elif s == "done":
+                _step_done(inline_ws, inline_training, reset_step="idle")
+
+    # Activation timer: wakes up inline section when training starts from dialog
+    def _activation_check() -> None:
+        _ww = state.training_worker
+        if _ww and _ww.is_running and inline_ws["step"] == "idle":
+            inline_ws["step"] = "training"
+            inline_training.refresh()
+        elif (_ww and _ww.is_done and _ww.result_model_id
+              and inline_ws["step"] == "idle"):
+            inline_ws["step"] = "done"
+            inline_ws["model_id"] = _ww.result_model_id
+            inline_training.refresh()
+
+    ui.timer(0.5, _activation_check)
+
     with ui.column().classes("w-full p-4 gap-6"):
         _gpu_card()
         ui.separator()
         _model_library()
-        ui.separator()
-        ui.label(t("models_train_title")).classes("text-xl font-bold")
-        _training_wizard()
+        inline_training()
 
 
 # ── GPU status card ───────────────────────────────────────────────────────────
@@ -625,15 +667,29 @@ def _model_library() -> None:
                         auto_upload=True,
                     ).props("accept=.zip flat").classes("w-full")
 
-                ui.label(t("models_or")).classes(
-                    "text-center text-gray-500 text-sm my-1")
+                from app.core.auth import get_session_user as _gsu
+                _cu = _gsu()
+                _is_admin = bool(_cu and _cu.get("role") == "admin")
+                ft_path_input = None   # only set for admins below
 
-                with ui.card().classes("w-full bg-gray-50 dark:bg-gray-800"):
-                    ui.label(t("models_step1_opt_path")).classes(
-                        "text-xs text-gray-500 dark:text-gray-400 mb-1")
-                    ft_path_input = ui.input(
-                        placeholder="e.g. C:/datasets/my_dataset"
-                    ).props("dense outlined").classes("w-full")
+                if _is_admin:
+                    ui.label(t("models_or")).classes(
+                        "text-center text-gray-500 text-sm my-1")
+                    with ui.card().classes(
+                        "w-full bg-gray-50 dark:bg-gray-800 "
+                        "border border-orange-300 dark:border-orange-700"
+                    ):
+                        with ui.row().classes("items-center gap-2 mb-1"):
+                            ui.icon("warning", size="xs").classes("text-orange-500")
+                            ui.label(t("models_path_admin_only")).classes(
+                                "text-xs font-semibold text-orange-600 dark:text-orange-300")
+                        ui.label(t("models_path_server_warning")).classes(
+                            "text-xs text-orange-500 dark:text-orange-400 mb-2")
+                        ui.label(t("models_step1_opt_path")).classes(
+                            "text-xs text-gray-500 dark:text-gray-400 mb-1")
+                        ft_path_input = ui.input(
+                            placeholder="e.g. C:/datasets/my_dataset"
+                        ).props("dense outlined").classes("w-full")
 
                 async def _ft_do_analyze() -> None:
                     ft_msg.set_text(t("models_step1_analysing"))
@@ -646,7 +702,7 @@ def _model_library() -> None:
                             return str(d), analyze_dataset(str(d))
                         _, result = await asyncio.get_event_loop().run_in_executor(
                             None, _work)
-                    elif ft_path_input.value.strip():
+                    elif ft_path_input is not None and ft_path_input.value.strip():
                         result = await asyncio.get_event_loop().run_in_executor(
                             None, analyze_dataset, ft_path_input.value.strip())
                     else:
@@ -846,31 +902,58 @@ def _model_library() -> None:
                         worker = TrainingWorker()
                         worker.start(config)
                         state.training_worker = worker
-                        ft_ws["step"] = "training"
-                        _ft_wizard_body.refresh()
+                        # Close fine-tune dialog — inline section takes over
+                        ft_dlg.close()
 
                     ui.button(t("models_ft_start"),
                               on_click=_ft_do_start).props("color=purple")
-
-            elif step == "training":
-                # ── FT Step 3: Live training (reuse existing step) ────────────
-                ui.label(t("models_ft_training_title")).classes(
-                    "text-base font-semibold mb-2")
-                _step_training(ft_ws, _ft_wizard_body)
-
-            elif step == "done":
-                # ── FT Step 4: Done ───────────────────────────────────────────
-                _step_done(ft_ws, _ft_wizard_body)
-                ui.button(t("models_cancel"), on_click=ft_dlg.close).props(
-                    "flat")
+            # "training" and "done" steps are handled by the inline section
+            # on the /models page (ft_dlg is closed when training starts)
 
         _ft_wizard_body()
+
+    # ── Train-new-model dialog ─────────────────────────────────────────────────
+    train_ws: dict = {
+        "step": "upload", "dataset_dir": None,
+        "analysis": None, "yaml_path": None, "model_id": None,
+    }
+
+    with ui.dialog() as train_dlg, \
+         ui.card().classes("p-5").style(
+             "min-width:820px; max-width:96vw; max-height:90vh; overflow-y:auto;"
+         ):
+        ui.label(t("models_train_title")).classes("text-lg font-bold mb-2")
+
+        @ui.refreshable
+        def _train_wizard_body() -> None:
+            s = train_ws["step"]
+            if   s == "upload":   _step_upload(train_ws, _train_wizard_body)
+            elif s == "analysis": _step_analysis(train_ws, _train_wizard_body,
+                                                 post_start_fn=train_dlg.close)
+            # "training" and "done" steps are handled by the inline section
+
+        _train_wizard_body()
+
+    def _open_train_dlg() -> None:
+        # If training is already running or just finished, the inline section on
+        # the page shows the progress — no need to open the dialog.
+        w = state.training_worker
+        if w and (w.is_running or w.is_done):
+            ui.notify(t("models_train_already_running"), type="info")
+            return
+        # Reset to fresh upload step for a new run
+        train_ws.update({"step": "upload", "dataset_dir": None,
+                         "analysis": None, "yaml_path": None, "model_id": None})
+        _train_wizard_body.refresh()
+        train_dlg.open()
 
     # ── Library card ──────────────────────────────────────────────────────────
     with ui.card().classes("w-full"):
         with ui.row().classes("items-center justify-between mb-2"):
             ui.label(t("models_library_title")).classes("text-lg font-bold")
             with ui.row().classes("gap-2"):
+                ui.button(t("models_train_btn"), icon="model_training",
+                          on_click=_open_train_dlg).props("flat color=green dense")
                 ui.button(t("models_import_btn"), icon="upload",
                           on_click=import_dlg.open).props("flat color=primary dense")
                 ui.button(icon="refresh",
@@ -1092,6 +1175,11 @@ def _model_library() -> None:
             mid = e.args.get("id")
             if not mid:
                 return
+            # Block while a training/fine-tune run is active
+            _w = state.training_worker
+            if _w and _w.is_running:
+                ui.notify(t("models_train_already_running"), type="info")
+                return
             m = get_model_by_id(int(mid))
             if not m or not m.get("pt_path"):
                 ui.notify(t("models_ft_no_pt"), type="negative")
@@ -1168,14 +1256,28 @@ def _step_upload(ws: dict, refresh) -> None:
                 auto_upload=True,
             ).props("accept=.zip flat").classes("w-full")
 
-        ui.label(t("models_or")).classes("text-center text-gray-500 text-sm my-1")
+        from app.core.auth import get_session_user as _gsu
+        _cu = _gsu()
+        _is_admin = bool(_cu and _cu.get("role") == "admin")
+        path_input = None   # only set for admins below
 
-        with ui.card().classes("w-full bg-gray-50 dark:bg-gray-800"):
-            ui.label(t("models_step1_opt_path")).classes(
-                "text-xs text-gray-500 dark:text-gray-400 mb-1")
-            path_input = ui.input(
-                placeholder="e.g. C:/datasets/my_dataset"
-            ).props("dense outlined").classes("w-full")
+        if _is_admin:
+            ui.label(t("models_or")).classes("text-center text-gray-500 text-sm my-1")
+            with ui.card().classes(
+                "w-full bg-gray-50 dark:bg-gray-800 "
+                "border border-orange-300 dark:border-orange-700"
+            ):
+                with ui.row().classes("items-center gap-2 mb-1"):
+                    ui.icon("warning", size="xs").classes("text-orange-500")
+                    ui.label(t("models_path_admin_only")).classes(
+                        "text-xs font-semibold text-orange-600 dark:text-orange-300")
+                ui.label(t("models_path_server_warning")).classes(
+                    "text-xs text-orange-500 dark:text-orange-400 mb-2")
+                ui.label(t("models_step1_opt_path")).classes(
+                    "text-xs text-gray-500 dark:text-gray-400 mb-1")
+                path_input = ui.input(
+                    placeholder="e.g. C:/datasets/my_dataset"
+                ).props("dense outlined").classes("w-full")
 
         async def do_analyze() -> None:
             msg_lbl.set_text(t("models_step1_analysing"))
@@ -1188,7 +1290,7 @@ def _step_upload(ws: dict, refresh) -> None:
                     return str(d), analyze_dataset(str(d))
                 ds_dir, result = await asyncio.get_event_loop().run_in_executor(
                     None, _work)
-            elif path_input.value.strip():
+            elif path_input is not None and path_input.value.strip():
                 ds_dir = path_input.value.strip()
                 result = await asyncio.get_event_loop().run_in_executor(
                     None, analyze_dataset, ds_dir)
@@ -1211,7 +1313,7 @@ def _step_upload(ws: dict, refresh) -> None:
 
 # ── Step 2: Analysis + config ─────────────────────────────────────────────────
 
-def _step_analysis(ws: dict, refresh) -> None:
+def _step_analysis(ws: dict, refresh, post_start_fn=None) -> None:
     a = ws["analysis"]
 
     with ui.column().classes("w-full gap-4"):
@@ -1334,8 +1436,10 @@ def _step_analysis(ws: dict, refresh) -> None:
                 worker = TrainingWorker()
                 worker.start(config)
                 state.training_worker = worker
-                ws["step"] = "training"
-                refresh.refresh()
+                # Close the setup dialog — inline section on the page takes over.
+                # post_start_fn is train_dlg.close() passed from _train_wizard_body.
+                if post_start_fn is not None:
+                    post_start_fn()
 
             ui.button(t("models_step2_start"), on_click=do_start).props("color=green")
 
@@ -1522,7 +1626,7 @@ def _cancel(ws: dict, refresh) -> None:
 
 # ── Step 4: Done ──────────────────────────────────────────────────────────────
 
-def _step_done(ws: dict, refresh) -> None:
+def _step_done(ws: dict, refresh, reset_step: str = "upload") -> None:
     mid   = ws.get("model_id")
     model = get_model_by_id(mid) if mid else None
 
@@ -1559,6 +1663,203 @@ def _step_done(ws: dict, refresh) -> None:
 
             def new_run() -> None:
                 state.training_worker = None
-                ws.update({"step": "upload", "analysis": None, "model_id": None})
+                ws.update({"step": reset_step, "analysis": None, "model_id": None})
                 refresh.refresh()
             ui.button(t("models_step4_another"), on_click=new_run).props("flat")
+
+
+# ── Inline training progress (no dialog, reads epoch_history directly) ────────
+
+def _inline_step_training(ws: dict, refresh) -> None:
+    """
+    Renders training progress inline on the /models page.
+
+    Unlike _step_training() (which drains worker.progress_q for real-time
+    dialog updates), this function reads directly from the worker's persistent
+    attributes — epoch_history, current_status, batch_progress — so it works
+    correctly whether or not the setup dialog is open, and survives page
+    navigation without missing events.
+
+    ws keys used: step ("idle" | "training" | "done"), model_id
+    """
+    worker: TrainingWorker = state.training_worker
+    if not worker:
+        ws["step"] = "idle"
+        refresh.refresh()
+        return
+
+    with ui.column().classes("w-full gap-4"):
+        ui.label(t("models_step3_title")).classes("text-base font-semibold")
+
+        with ui.card().classes("w-full"):
+            status_lbl = ui.label(
+                worker.current_status or "…"
+            ).classes("text-sm font-mono text-yellow-300 mb-1")
+            epoch_lbl = ui.label("").classes(
+                "text-xs text-gray-500 dark:text-gray-400 mb-1")
+            ui.label(t("models_step3_epoch_prog")).classes(
+                "text-xs text-gray-500 dark:text-gray-500 mb-0")
+            prog_epoch = ui.linear_progress(value=0).props("color=green")
+            ui.label(t("models_step3_batch_prog")).classes(
+                "text-xs text-gray-500 mt-2 mb-0")
+            prog_batch = ui.linear_progress(value=0).props("color=blue")
+            batch_lbl  = ui.label("").classes(
+                "text-xs text-gray-500 dark:text-gray-500 mt-0")
+
+        with ui.card().classes("w-full"):
+            ui.label(t("models_step3_val_map")).classes(
+                "text-sm font-semibold text-gray-600 dark:text-gray-400 mb-1")
+            map_chart = ui.echart({
+                "tooltip": {"trigger": "axis"},
+                "legend":  {"data": ["mAP50", "mAP50-95"],
+                            "textStyle": {"color": "#ccc"}},
+                "grid":    {"left": "3%", "right": "4%",
+                            "bottom": "3%", "containLabel": True},
+                "xAxis":   {"type": "category", "data": [],
+                            "name": "Epoch",
+                            "axisLabel": {"color": "#aaa"}},
+                "yAxis":   {"type": "value", "min": 0, "max": 1,
+                            "axisLabel": {"color": "#aaa"}},
+                "series":  [
+                    {"name": "mAP50",    "type": "line", "smooth": True,
+                     "data": [], "itemStyle": {"color": "#4ec9b0"},
+                     "showSymbol": False},
+                    {"name": "mAP50-95", "type": "line", "smooth": True,
+                     "data": [], "itemStyle": {"color": "#4b8cf5"},
+                     "showSymbol": False},
+                ],
+            }).classes("w-full").style("height:240px")
+
+        with ui.card().classes("w-full"):
+            ui.label(t("models_step3_train_loss")).classes(
+                "text-sm font-semibold text-gray-600 dark:text-gray-400 mb-1")
+            loss_chart = ui.echart({
+                "tooltip": {"trigger": "axis"},
+                "legend":  {"data": ["box", "cls", "dfl"],
+                            "textStyle": {"color": "#ccc"}},
+                "grid":    {"left": "3%", "right": "4%",
+                            "bottom": "3%", "containLabel": True},
+                "xAxis":   {"type": "category", "data": [],
+                            "name": "Epoch",
+                            "axisLabel": {"color": "#aaa"}},
+                "yAxis":   {"type": "value",
+                            "axisLabel": {"color": "#aaa"}},
+                "series":  [
+                    {"name": "box", "type": "line", "smooth": True,
+                     "data": [], "itemStyle": {"color": "#f56262"},
+                     "showSymbol": False},
+                    {"name": "cls", "type": "line", "smooth": True,
+                     "data": [], "itemStyle": {"color": "#dcdcaa"},
+                     "showSymbol": False},
+                    {"name": "dfl", "type": "line", "smooth": True,
+                     "data": [], "itemStyle": {"color": "#c084fc"},
+                     "showSymbol": False},
+                ],
+            }).classes("w-full").style("height:240px")
+
+        ui.button(t("models_step3_cancel"),
+                  on_click=lambda: _inline_cancel(ws, refresh)).props("flat color=red")
+
+    # ── Data arrays (updated incrementally) ──────────────────────────────────
+    epochs_x: list = []
+    map50_y:  list = []; m5095_y: list = []
+    box_y:    list = []; cls_y:   list = []; dfl_y: list = []
+    last_len  = [0]   # how many epoch_history entries we have already rendered
+
+    def _append(msg: dict) -> None:
+        ep = str(msg["epoch"])
+        if ep not in epochs_x:
+            epochs_x.append(ep)
+        map50_y.append( round(msg["map50"],    4))
+        m5095_y.append( round(msg["map50_95"], 4))
+        box_y.append(   round(msg["box_loss"], 5))
+        cls_y.append(   round(msg["cls_loss"], 5))
+        dfl_y.append(   round(msg["dfl_loss"], 5))
+
+    def _redraw() -> None:
+        map_chart.options["xAxis"]["data"]     = epochs_x
+        map_chart.options["series"][0]["data"] = map50_y
+        map_chart.options["series"][1]["data"] = m5095_y
+        map_chart.update()
+        loss_chart.options["xAxis"]["data"]     = epochs_x
+        loss_chart.options["series"][0]["data"] = box_y
+        loss_chart.options["series"][1]["data"] = cls_y
+        loss_chart.options["series"][2]["data"] = dfl_y
+        loss_chart.update()
+
+    # Replay any epochs that happened before this page was loaded
+    hist = list(worker.epoch_history)   # snapshot to avoid race
+    if hist:
+        for msg in hist:
+            _append(msg)
+        _redraw()
+        last  = hist[-1]
+        last_len[0] = len(hist)
+        epoch_lbl.set_text(f"Epoch {last['epoch']} / {last['total']}")
+        prog_epoch.set_value(
+            last["epoch"] / last["total"] if last["total"] else 0)
+
+    # ── Timer: polls worker state every 500 ms ────────────────────────────────
+    def tick() -> None:
+        if worker is None:
+            inline_timer.cancel()
+            return
+
+        # Batch / status — always-fresh attributes, no queue needed
+        bp = worker.batch_progress
+        if bp["total_batches"] > 0:
+            prog_batch.set_value(bp["batch"] / bp["total_batches"])
+            batch_lbl.set_text(
+                f"Batch {bp['batch']} / {bp['total_batches']}  "
+                f"(epoch {bp['epoch']} / {bp['total_epochs']})")
+        status_lbl.set_text(worker.current_status or "…")
+
+        # Pick up any newly completed epochs from history
+        curr_hist = worker.epoch_history
+        if len(curr_hist) > last_len[0]:
+            new_msgs = curr_hist[last_len[0]:]
+            last_len[0] = len(curr_hist)
+            for msg in new_msgs:
+                _append(msg)
+            latest = new_msgs[-1]
+            epoch_lbl.set_text(
+                f"Epoch {latest['epoch']} / {latest['total']}  |  "
+                f"mAP50 {latest['map50']:.3f}  |  "
+                f"Precision {latest['precision']:.3f}  |  "
+                f"Recall {latest['recall']:.3f}"
+            )
+            prog_epoch.set_value(
+                latest["epoch"] / latest["total"] if latest["total"] else 0)
+            _redraw()
+
+        # Detect any terminal state (is_done is set in _run()'s finally block)
+        if not worker.is_running and worker.is_done:
+            inline_timer.cancel()
+            if worker.error_message:
+                # Error — show message, don't advance to done
+                status_lbl.set_text(f"❌  {worker.error_message}")
+                status_lbl.classes(replace="text-sm font-mono text-red-400")
+            elif worker.result_model_id:
+                # Success — show done card
+                _model_library.refresh()
+                ws["step"]     = "done"
+                ws["model_id"] = worker.result_model_id
+                refresh.refresh()
+            else:
+                # Cancelled — hide inline section silently
+                ws["step"] = "idle"
+                state.training_worker = None
+                refresh.refresh()
+            return
+
+    inline_timer = ui.timer(0.5, tick)
+
+
+def _inline_cancel(ws: dict, refresh) -> None:
+    """Cancel training and hide the inline section."""
+    if state.training_worker:
+        state.training_worker.cancel()
+        state.training_worker = None
+    ws["step"] = "idle"
+    ws["model_id"] = None
+    refresh.refresh()

@@ -121,6 +121,36 @@ def nav(current_user: dict) -> None:
             ui.timer(1.0, _sync_buttons)
 
         with ui.row().classes("ml-auto items-center gap-2"):
+            # ── Training / fine-tuning progress chip (teacher + admin) ─────────
+            if role in ("teacher", "admin"):
+                with ui.row().classes("items-center gap-1") as train_chip_row:
+                    ui.icon("model_training", size="xs").classes(
+                        "text-purple-400")
+                    train_chip_lbl = ui.label("").classes(
+                        "text-xs font-mono text-purple-300")
+                    ui.link(t("nav_models"), "/models").classes(
+                        "text-xs text-purple-400 no-underline hover:text-purple-200")
+                train_chip_row.set_visibility(False)
+
+                def _sync_training() -> None:
+                    w = state.training_worker
+                    if w and w.is_running:
+                        train_chip_row.set_visibility(True)
+                        bp = w.batch_progress
+                        ep    = bp.get("epoch", 0)
+                        total = bp.get("total_epochs", 0)
+                        if total:
+                            train_chip_lbl.set_text(f"ep {ep}/{total}")
+                        else:
+                            raw = w.current_status or t("nav_training_running")
+                            train_chip_lbl.set_text(raw[:30])
+                    else:
+                        train_chip_row.set_visibility(False)
+
+                _sync_training()
+                ui.timer(2.0, _sync_training)
+                ui.separator().props("vertical").classes("opacity-30 mx-1")
+
             if role == "teacher":
                 _notification_bell()
                 ui.separator().props("vertical").classes("opacity-30")

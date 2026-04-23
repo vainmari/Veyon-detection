@@ -36,6 +36,7 @@ from app.core.auth import require_auth
 from app.db.database import (
     create_ml_model,
     delete_model,
+    get_active_model,
     get_model_by_id,
     list_models,
     list_schedules_using_model,
@@ -377,6 +378,9 @@ def _model_library() -> None:
                     imp_msg.classes(replace="text-sm text-red-400")
                     return
                 sync_classes_from_model(new_mid)
+                if not get_active_model():
+                    set_active_model(new_mid)
+                    apply_active_model(new_mid)
                 from app.core.auth import get_session_user
                 _u = get_session_user()
                 log_action("model.import", user_id=_u["id"] if _u else None,
@@ -1129,6 +1133,9 @@ def _model_library() -> None:
             if not mid:
                 return
             mid = int(mid)
+            if mid == state.running_model_id:
+                ui.notify(t("models_cannot_delete_running"), type="warning")
+                return
             m = get_model_by_id(mid)
             if not m:
                 return
@@ -1609,9 +1616,13 @@ def _step_training(ws: dict, refresh) -> None:
                     f"Recall {msg['recall']:.3f}")
                 changed = True
             elif t == "done":
-                ws["model_id"] = msg["model_id"]
+                new_mid = msg["model_id"]
+                ws["model_id"] = new_mid
                 ws["step"]     = "done"
                 timer.cancel()
+                if not get_active_model():
+                    set_active_model(new_mid)
+                    apply_active_model(new_mid)
                 _model_library.refresh()
                 refresh.refresh()
                 return

@@ -77,6 +77,10 @@ def nav(current_user: dict) -> None:
             def do_start() -> None:
                 if state.monitor:
                     return
+                from app.db.database import get_active_model
+                if not get_active_model():
+                    ui.notify(t("dash_no_active_model"), type="warning")
+                    return
                 from app.config import collect_cfg
                 from app.core.yolo import reset_model
                 from app.services.monitor_service import MonitorController

@@ -11,7 +11,7 @@ import app.state as state
 from app.config import collect_cfg
 from app.core.auth import require_auth
 from app.core.yolo import reset_model
-from app.db.database import list_groups, list_computers_in_group, log_action
+from app.db.database import get_active_model, list_groups, list_computers_in_group, log_action
 from app.pages._nav import nav
 from app.services.monitor_service import MonitorController
 from app.translate import t
@@ -130,6 +130,9 @@ def page_dashboard() -> None:
 
     def do_start() -> None:
         if state.monitor:
+            return
+        if not get_active_model():
+            ui.notify(t("dash_no_active_model"), type="warning")
             return
         try:
             cfg = collect_cfg()

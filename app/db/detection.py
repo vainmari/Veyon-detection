@@ -41,10 +41,15 @@ def insert_event(
     os_username: Optional[str]   = None,
     frame_bytes:      Optional[bytes] = None,
     model_id:         Optional[int]   = None,
+    _commit:          bool            = True,
 ) -> int:
     """
     Write one detection_event row + one detection row per bounding box.
     Always called — even when dets is empty (had_detection = 0).
+
+    Pass _commit=False from a batching caller to coalesce many events into a
+    single transaction (one fsync). The caller must call conn.commit()
+    afterwards — all inserts up to that point share one WAL transaction.
     """
     c = _conn()
     cur = c.execute(
@@ -71,7 +76,8 @@ def insert_event(
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (event_id, cls_row[0], d["conf"], *d["box"]),
         )
-    c.commit()
+    if _commit:
+        c.commit()
     return event_id
 
 

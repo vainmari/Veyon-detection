@@ -4,8 +4,10 @@ app/services/monitor_service.py
 MonitorController  — per-computer I/O threads + single YOLO batch thread.
 drain_worker       — drains queues into global state (no DB writes here).
 
-DB writes happen inside the detect worker so each frame → event is atomic.
-Frames are stored as JPEG BLOBs directly in the database (no disk I/O).
+DB writes happen inside the detect worker. Every insert in a single
+inference batch shares one transaction (one fsync) to keep the hot path
+fast even at 30 computers × 1 fps. Frames are stored as JPEG BLOBs
+directly in the database (no disk I/O).
 
 Queue discipline
 ────────────────
@@ -23,14 +25,15 @@ import time
 from datetime import datetime
 from typing import Optional
 
-import cv2
+import numpy as np
 import requests
 import torch
 
 import app.state as state
 from app.core import veyon, yolo
-from app.core.imaging import postprocess, img_to_b64
+from app.core.imaging import postprocess, encode_jpeg
 from app.core.veyon import WEBAPI_BASE_TPL
+from app.db._core import _conn
 from app.services import alert_service
 from app.db.database import (
     auto_create_student,
@@ -268,6 +271,27 @@ class MonitorController:
 
         model = yolo.get_model(model_path)
 
+        # FP16 on CUDA only — halves VRAM and ~30% faster on nvidia. On CPU
+        # it's slower (no native fp16 path in most CPU kernels) so we skip it.
+        use_half = (device == "cuda")
+
+        # Warm up the model so the first real batch doesn't eat a 200-300 ms
+        # JIT / kernel-compile stall that would stall the whole detect loop.
+        try:
+            _warm = np.zeros((detect_imgsz, detect_imgsz, 3), dtype=np.uint8)
+            model([_warm],
+                  imgsz=detect_imgsz,
+                  conf=0.99, iou=0.99,
+                  verbose=False, device=device, rect=True, half=use_half)
+            self._log(f"Model warmed up ({'fp16' if use_half else 'fp32'})")
+        except Exception as _e:
+            self._log(f"⚠ Model warmup skipped: {_e}")
+
+        img_q_put  = int(cfg["img_quality"])
+        keep_top1  = bool(cfg["keep_top1"])
+        det_conf   = float(cfg["detect_conf"])
+        det_iou    = float(cfg["detect_iou"])
+
         # Publish which model is actually running so UI pages can reflect it.
         state.running_model_id = active_model_id
 
@@ -288,13 +312,11 @@ class MonitorController:
                 # Decode all images in batch
                 imgs         = []
                 valid_names  = []
-                valid_raws   = []
                 for n, raw in zip(name_batch, raw_batch):
                     img = veyon.decode_image(raw)
                     if img is not None:
                         imgs.append(img)
                         valid_names.append(n)
-                        valid_raws.append(raw)
 
                 if not imgs:
                     continue
@@ -303,9 +325,9 @@ class MonitorController:
                     results = model(
                         imgs,
                         imgsz=detect_imgsz,
-                        conf=float(cfg["detect_conf"]),
-                        iou=float(cfg["detect_iou"]),
-                        verbose=False, device=device, rect=True,
+                        conf=det_conf,
+                        iou=det_iou,
+                        verbose=False, device=device, rect=True, half=use_half,
                     )
 
                     # Re-fetch active model each batch in case it changed
@@ -313,16 +335,20 @@ class MonitorController:
                         _active = get_active_model()
                         active_model_id = _active["id"] if _active else None
 
-                    for comp_name, res, img_bgr in zip(valid_names, results, imgs):
-                        annotated, dets = postprocess(
-                            res, img_bgr, bool(cfg["keep_top1"])
-                        )
+                    # Accumulate everything produced by this inference batch and
+                    # commit once at the end: a single WAL fsync for 30 frames
+                    # instead of 30 fsyncs (~20-30% throughput win at scale).
+                    batch_log: list[str] = []
+                    wrote_anything = False
 
-                        # Store the RAW frame so the DB always holds clean pixels.
-                        ok, buf = cv2.imencode(
-                            ".jpg", img_bgr, [cv2.IMWRITE_JPEG_QUALITY, int(cfg["img_quality"])]
-                        )
-                        frame_bytes = buf.tobytes() if ok else None
+                    for comp_name, res, img_bgr in zip(valid_names, results, imgs):
+                        annotated, dets = postprocess(res, img_bgr, keep_top1)
+
+                        # Encode raw JPEG once. When there are no detections
+                        # `annotated is img_bgr`, so the same bytes serve the DB
+                        # and the preview — no second encode.
+                        raw_bytes = encode_jpeg(img_bgr, img_q_put)
+                        ann_bytes = raw_bytes if not dets else encode_jpeg(annotated, img_q_put)
 
                         computer_id = state.computer_ids.get(comp_name)
                         user_id     = state.computer_users.get(comp_name)
@@ -333,9 +359,11 @@ class MonitorController:
                                 computer_id, dets,
                                 user_id=user_id,
                                 os_username=os_uname,
-                                frame_bytes=frame_bytes,
+                                frame_bytes=raw_bytes or None,
                                 model_id=active_model_id,
+                                _commit=False,
                             )
+                            wrote_anything = True
                             n_fired = alert_service.check_and_fire(
                                 ev_id, dets, comp_name,
                                 model_id=active_model_id,
@@ -347,19 +375,21 @@ class MonitorController:
                                 if u:
                                     student_disp = u["username"]
                             if n_fired:
-                                self._log(
+                                batch_log.append(
                                     f"[{comp_name}] 🔔 {n_fired} alert(s) fired "
                                     f"({student_disp})"
                                 )
 
-                        # Push to live preview queue — drop silently if full
+                        # Push pre-encoded JPEG bytes to live preview queue
                         try:
-                            state.img_q.put_nowait((comp_name, img_bgr, annotated, dets))
+                            state.img_q.put_nowait(
+                                (comp_name, raw_bytes, ann_bytes, dets)
+                            )
                         except queue.Full:
                             pass
 
                         if dets:
-                            self._log(
+                            batch_log.append(
                                 f"[{comp_name}] " +
                                 ", ".join(
                                     f"{d['class_name']}({d['conf']:.0%})"
@@ -367,7 +397,18 @@ class MonitorController:
                                 )
                             )
                         else:
-                            self._log(f"[{comp_name}] no detections")
+                            batch_log.append(f"[{comp_name}] no detections")
+
+                    # Single commit flushes every insert_event + insert_notification
+                    # from this batch as one transaction.
+                    if wrote_anything:
+                        try:
+                            _conn().commit()
+                        except Exception as _ce:
+                            self._log(f"⚠ DB commit failed: {_ce}")
+
+                    for line in batch_log:
+                        self._log(line)
 
                 except Exception as e:
                     self._log(f"❌ Detection error: {e}")
@@ -383,7 +424,13 @@ def drain_worker() -> None:
     """
     Daemon thread — drains log_q and img_q into global state.
     DB writes are done in the detect worker, not here.
+
+    img_q now carries pre-encoded JPEG bytes from the detect worker; the
+    drain only has to base64-wrap them (very cheap), instead of running a
+    full cv2.imencode per frame per computer on every cycle.
     """
+    from app.core.imaging import bytes_to_b64_dataurl
+
     while True:
         try:
             while True:
@@ -397,8 +444,15 @@ def drain_worker() -> None:
 
         try:
             while True:
-                name, raw_bgr, ann_bgr, dets = state.img_q.get_nowait()
-                state.latest_frames[name] = (img_to_b64(ann_bgr), img_to_b64(raw_bgr), dets)
+                name, raw_bytes, ann_bytes, dets = state.img_q.get_nowait()
+                # If ann_bytes is raw_bytes (no detections) the wrapper gets
+                # called twice on the same bytes; base64 encoding is ~free
+                # compared to the JPEG encode we already eliminated.
+                state.latest_frames[name] = (
+                    bytes_to_b64_dataurl(ann_bytes),
+                    bytes_to_b64_dataurl(raw_bytes),
+                    dets,
+                )
         except queue.Empty:
             pass
 

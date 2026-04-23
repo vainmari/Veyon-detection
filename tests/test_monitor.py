@@ -12,6 +12,7 @@ import threading
 import time
 from unittest.mock import MagicMock, patch
 
+import cv2
 import numpy as np
 import pytest
 
@@ -21,6 +22,14 @@ from app.services.monitor_service import (
     drain_worker,
 )
 import app.state as state
+
+
+def _jpeg_bytes(h: int = 10, w: int = 10, fill: int = 0) -> bytes:
+    """Small valid JPEG for drain_worker tests (it now expects bytes, not ndarrays)."""
+    img = np.full((h, w, 3), fill, dtype=np.uint8)
+    ok, buf = cv2.imencode(".jpg", img)
+    assert ok
+    return buf.tobytes()
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -98,24 +107,25 @@ class TestDrainWorker:
         assert len(state.log_buffer) <= state.LOG_CAP
 
     def test_drains_image_queue(self):
-        img = np.zeros((10, 10, 3), dtype=np.uint8)
-        state.img_q.put(("PC-01", img, img, []))
+        # img_q now carries pre-encoded JPEG bytes, not BGR ndarrays
+        jpg = _jpeg_bytes()
+        state.img_q.put(("PC-01", jpg, jpg, []))
         self._run_briefly()
         assert "PC-01" in state.latest_frames
 
     def test_latest_frame_overwritten_by_newer(self):
-        img1 = np.zeros((10, 10, 3), dtype=np.uint8)
-        img2 = np.full((10, 10, 3), 255, dtype=np.uint8)
-        state.img_q.put(("PC-01", img1, img1, [{"class_name": "old"}]))
-        state.img_q.put(("PC-01", img2, img2, [{"class_name": "new"}]))
+        jpg1 = _jpeg_bytes(fill=0)
+        jpg2 = _jpeg_bytes(fill=255)
+        state.img_q.put(("PC-01", jpg1, jpg1, [{"class_name": "old"}]))
+        state.img_q.put(("PC-01", jpg2, jpg2, [{"class_name": "new"}]))
         self._run_briefly()
         _, _, dets = state.latest_frames["PC-01"]
         assert dets[0]["class_name"] == "new"
 
     def test_multiple_computers_tracked(self):
-        img = np.zeros((5, 5, 3), dtype=np.uint8)
-        state.img_q.put(("PC-01", img, img, []))
-        state.img_q.put(("PC-02", img, img, []))
+        jpg = _jpeg_bytes()
+        state.img_q.put(("PC-01", jpg, jpg, []))
+        state.img_q.put(("PC-02", jpg, jpg, []))
         self._run_briefly()
         assert "PC-01" in state.latest_frames
         assert "PC-02" in state.latest_frames

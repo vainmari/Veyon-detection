@@ -24,6 +24,9 @@ def postprocess(
     """
     Draw bounding boxes on a copy of img_bgr and return
     (annotated_image, detection_list).
+
+    When there are no detections we skip the ~600 KB image copy and return
+    img_bgr directly — most classroom frames have zero detections.
     """
     names = res.names
     raw = [
@@ -37,6 +40,9 @@ def postprocess(
             if b["cls_id"] not in top or b["conf"] > top[b["cls_id"]]["conf"]:
                 top[b["cls_id"]] = b
         raw = list(top.values())
+
+    if not raw:
+        return img_bgr, []
 
     annotated = img_bgr.copy()
     dets: list[dict] = []
@@ -66,11 +72,26 @@ def postprocess(
     return annotated, dets
 
 
-def img_to_b64(img_bgr: np.ndarray, quality: int = 82) -> str:
-    """Encode a BGR numpy array to a base64 JPEG data-URL for ui.image."""
+def encode_jpeg(img_bgr: np.ndarray, quality: int = 85) -> bytes:
+    """Encode a BGR numpy array to raw JPEG bytes. Returns b'' on failure."""
     ok, buf = cv2.imencode(".jpg", img_bgr, [cv2.IMWRITE_JPEG_QUALITY, quality])
-    if not ok:
+    return buf.tobytes() if ok else b""
+
+
+def bytes_to_b64_dataurl(jpeg_bytes: bytes) -> str:
+    """Wrap already-encoded JPEG bytes as a base64 data-URL for ui.image."""
+    if not jpeg_bytes:
         return ""
-    return "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode()
+    return "data:image/jpeg;base64," + base64.b64encode(jpeg_bytes).decode()
+
+
+def img_to_b64(img_bgr: np.ndarray, quality: int = 82) -> str:
+    """Encode a BGR numpy array to a base64 JPEG data-URL for ui.image.
+
+    Kept for callers that don't have pre-encoded bytes. The hot path in the
+    monitor service calls encode_jpeg() + bytes_to_b64_dataurl() so the JPEG
+    is produced once and reused for DB and preview.
+    """
+    return bytes_to_b64_dataurl(encode_jpeg(img_bgr, quality))
 
 

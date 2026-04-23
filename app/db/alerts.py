@@ -43,6 +43,13 @@ def set_alert_rule(class_id: int, enabled: bool) -> None:
     _insert_audit(c, "alert.rule", entity="detection_class", entity_id=class_id,
                   detail="enabled" if enabled else "disabled")
     c.commit()
+    # Drop the in-process alert-rule cache so detect worker picks up the change
+    # on the very next frame instead of waiting for the TTL to expire.
+    try:
+        from app.services.alert_service import invalidate_prohibited_cache
+        invalidate_prohibited_cache()
+    except Exception:
+        pass
 
 
 def get_prohibited_class_ids(
@@ -95,14 +102,15 @@ def get_prohibited_class_ids(
 
 # ── Notifications ─────────────────────────────────────────────────────────────
 
-def insert_notification(event_id: int, class_id: int) -> int:
+def insert_notification(event_id: int, class_id: int, _commit: bool = True) -> int:
     c = _conn()
     cur = c.execute(
         "INSERT INTO notification (event_id, class_id, created_at) "
         "VALUES (?, ?, ?)",
         (event_id, class_id, _now()),
     )
-    c.commit()
+    if _commit:
+        c.commit()
     return cur.lastrowid
 
 

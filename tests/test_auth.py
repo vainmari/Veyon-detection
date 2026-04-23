@@ -94,10 +94,12 @@ class TestRequireAuth:
         assert auth.require_auth() == user
 
     def test_redirects_when_wrong_role(self):
+        # Wrong-role users get sent to their own home page (not a fixed "/"),
+        # otherwise students/admins hit an infinite reload loop on teacher-only "/".
         user = {"id": 2, "username": "jonas", "role": "student"}
         auth, _, mock_ui = _import_auth({"auth": user})
         result = auth.require_auth(required_role="teacher")
-        mock_ui.navigate.to.assert_called_once_with("/")
+        mock_ui.navigate.to.assert_called_once_with("/history")
         assert result is None
 
     def test_passes_when_correct_role(self):

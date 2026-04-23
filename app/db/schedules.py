@@ -156,6 +156,11 @@ def set_schedule_notify_classes(schedule_id: int, class_ids: list[int]) -> None:
             [(schedule_id, cid) for cid in class_ids],
         )
     c.commit()
+    try:
+        from app.services.alert_service import invalidate_prohibited_cache
+        invalidate_prohibited_cache()
+    except Exception:
+        pass
 
 
 def list_schedules_using_model(model_id: int) -> list[dict]:

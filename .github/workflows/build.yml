@@ -3,6 +3,7 @@ name: Test & Build
 on:
   push:
     branches: ["master", "main"]
+    tags: ["v*.*.*"]
   pull_request:
     branches: ["master", "main"]
 
@@ -36,7 +37,25 @@ jobs:
       - name: Build exe
         run: python build.py
 
-      - name: Upload artifact
+      - name: Zip release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/weights | Out-Null
+          New-Item -ItemType Directory -Force -Path dist/data    | Out-Null
+          Compress-Archive -Path dist/VeyonAIMonitor.exe, dist/weights, dist/data `
+            -DestinationPath dist/VeyonAIMonitor-${{ github.ref_name }}-windows.zip
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Veyon AI Monitor ${{ github.ref_name }}"
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: dist/VeyonAIMonitor-${{ github.ref_name }}-windows.zip
+
+      - name: Upload artifact (non-release builds)
+        if: "!startsWith(github.ref, 'refs/tags/')"
         uses: actions/upload-artifact@v4
         with:
           name: VeyonAIMonitor-${{ github.sha }}
@@ -44,4 +63,4 @@ jobs:
             dist/VeyonAIMonitor.exe
             dist/weights/
             dist/data/
-          retention-days: 30
+          retention-days: 14

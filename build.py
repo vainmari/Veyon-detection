@@ -159,13 +159,16 @@ def main() -> None:
         weights_dst.mkdir(parents=True, exist_ok=True)
         print("  ⚠  weights/ not found — copy your .onnx model there before shipping")
 
-    for fname in (".env.example", "readme.md"):
+    for fname in ("readme.md",):
         src = ROOT / fname
         if src.exists():
             shutil.copy2(src, DIST_DIR / fname)
             print(f"  ✓ {fname}")
 
-    (DIST_DIR / "data").mkdir(exist_ok=True)
+    data_dir = DIST_DIR / "data"
+    data_dir.mkdir(exist_ok=True)
+    (data_dir / ".gitkeep").touch()
+    print("  ✓ data/")
 
     # ── 5. Summary ────────────────────────────────────────────────────────────
     print(f"\n✅  Build complete.")

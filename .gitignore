@@ -1,18 +1,24 @@
-# Ignore private keys and certificates
+# Private keys and certificates
 *.pem
 *.env
 
-# Ignore common image formats
+# Common image formats
 *.jpg
 *.jpeg
 *.png
 
-# Ignore DB
+# DB
 *.db
 
-# Ignore Python compiled files
+# Python compiled files
 **/*.pyc
 **/__pycache__/
+
+# Build artifacts
+.build
+.dist
+.veyon_ai_monitor.egg-info
+.VeyonAIMonitor.spec
 
 # Runtime data
 data/

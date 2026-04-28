@@ -46,6 +46,7 @@ from app.db.database import (
     update_ml_model,
     update_schedule,
 )
+
 from app.pages._nav import nav
 from app.translate import t
 from app.services.training_service import (
@@ -59,6 +60,8 @@ from app.services.training_service import (
     prepare_splits,
     remap_dataset_for_finetune,
 )
+# Import the file browser utility
+from app.pages._file_browser import browse_file
 
 
 @ui.page("/models")
@@ -282,9 +285,12 @@ def _model_library() -> None:
                     "text-xs text-orange-500 dark:text-orange-400 mb-2")
                 ui.label(t("models_opt_path")).classes(
                     "text-xs text-gray-500 dark:text-gray-400 mb-1")
+                # Use a text input and a browse button for server-side file selection
                 imp_path = ui.input(
                     placeholder="e.g. weights/ONNX_FP32.onnx"
                 ).props("dense outlined").classes("w-full")
+                ui.button("Browse server...", on_click=lambda: browse_file(imp_path, title="Select model file", extensions=[".onnx", ".pt"]))
+                # Note: Only files can be selected here. For dataset upload (folders), see below.
 
         ui.separator().classes("my-2")
 
@@ -709,6 +715,10 @@ def _model_library() -> None:
                         ft_path_input = ui.input(
                             placeholder="e.g. C:/datasets/my_dataset"
                         ).props("dense outlined").classes("w-full")
+                        ui.button(
+                            "Browse server folders...",
+                            on_click=lambda: browse_file(ft_path_input, title="Select dataset folder", mode="folder")
+                        )
 
                 async def _ft_do_analyze() -> None:
                     ft_msg.set_text(t("models_step1_analysing"))
@@ -1300,6 +1310,10 @@ def _step_upload(ws: dict, refresh) -> None:
                 path_input = ui.input(
                     placeholder="e.g. C:/datasets/my_dataset"
                 ).props("dense outlined").classes("w-full")
+                ui.button(
+                    "Browse server folders...",
+                    on_click=lambda: browse_file(path_input, title="Select dataset folder", mode="folder")
+                )
 
         async def do_analyze() -> None:
             msg_lbl.set_text(t("models_step1_analysing"))

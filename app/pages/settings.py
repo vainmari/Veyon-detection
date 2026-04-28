@@ -9,6 +9,7 @@ from nicegui import ui
 from app.config import get_settings, save_settings
 from app.core.auth import require_auth
 from app.db.database import log_action
+from app.pages._file_browser import browse_file
 from app.pages._nav import nav
 from app.translate import t
 
@@ -70,7 +71,22 @@ def page_settings() -> None:
 
         with ui.column().classes("w-full gap-0") as key_section:
             row("key_name", t("settings_key_name"))
-            row("key_path", t("settings_key_path"))
+            
+            with ui.row().classes("w-full items-center gap-4 py-1"):
+                ui.label(t("settings_key_path")).classes("w-60 text-sm")
+                key_path_inp = ui.input(
+                    value=str(s.get("key_path", ""))
+                ).props("dense outlined").classes("flex-1")
+
+                ui.button(
+                    icon="folder_open",
+                    on_click=lambda: browse_file(
+                        key_path_inp,
+                        extensions=[".pem"],
+                    ),
+                ).props("flat dense").tooltip(t("settings_browse_pem"))
+            widgets["key_path"] = key_path_inp
+
 
         with ui.column().classes("w-full gap-0") as logon_section:
             row("logon_username", t("settings_logon_user"))
@@ -85,7 +101,22 @@ def page_settings() -> None:
 
         # ── Veyon CLI ─────────────────────────────────────────────────────────
         section(t("settings_veyon_cli"))
-        row("veyon_cli", t("settings_veyon_path"))
+        with ui.row().classes("w-full items-center gap-4 py-1"):
+            ui.label(t("settings_veyon_path")).classes("w-60 text-sm")
+
+            veyon_inp = ui.input(
+                value=str(s.get("veyon_cli", ""))
+            ).props("dense outlined").classes("flex-1")
+
+            ui.button(
+                icon="folder_open",
+                on_click=lambda: browse_file(
+                    veyon_inp,
+                    extensions=[".exe"]
+                ),
+            ).props("flat dense")
+
+        widgets["veyon_cli"] = veyon_inp
 
         # ── WebAPI Server ─────────────────────────────────────────────────────
         section(t("settings_webapi"))

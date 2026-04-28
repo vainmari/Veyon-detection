@@ -15,10 +15,10 @@
 **/__pycache__/
 
 # Build artifacts
-.build
-.dist
-.veyon_ai_monitor.egg-info
-.VeyonAIMonitor.spec
+build/
+dist/
+veyon_ai_monitor.egg-info/
+VeyonAIMonitor.spec
 
 # Runtime data
 data/

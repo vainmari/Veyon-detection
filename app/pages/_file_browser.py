@@ -6,6 +6,39 @@ Generic file browser (server-side, reusable)
 from pathlib import Path
 from nicegui import ui
 
+def _list_entries(
+    p: Path,
+    extensions: list[str] | None,
+    mode: str,
+) -> list[tuple[str, str, Path]]:
+    """
+    Return sorted (kind, name, path) entries for directory p.
+    kind is 'dir' or 'file'. A '..' entry is prepended for non-root paths.
+    Files are omitted entirely when mode=='folder'.
+    Extension filtering only applies to files.
+    PermissionError is silently swallowed.
+    """
+    entries: list[tuple[str, str, Path]] = []
+    if p.parent != p:
+        entries.append(("dir", "..", p.parent))
+    try:
+        for child in sorted(
+            p.iterdir(),
+            key=lambda x: (not x.is_dir(), x.name.lower()),
+        ):
+            if child.is_dir():
+                entries.append(("dir", child.name, child))
+            else:
+                if mode == "folder":
+                    continue
+                if extensions and child.suffix.lower() not in extensions:
+                    continue
+                entries.append(("file", child.name, child))
+    except PermissionError:
+        pass
+    return entries
+
+
 def browse_file(
     input_widget,
     title: str | None = None,
@@ -53,25 +86,7 @@ def browse_file(
                 if path_str in rows:
                     rows[path_str].classes(add="bg-blue-100 dark:bg-blue-900")
 
-            entries: list[tuple[str, str, Path]] = []
-
-            if p.parent != p:
-                entries.append(("dir", "..", p.parent))
-
-            try:
-                for child in sorted(
-                    p.iterdir(),
-                    key=lambda x: (not x.is_dir(), x.name.lower()),
-                ):
-                    if child.is_dir():
-                        entries.append(("dir", child.name, child))
-                    else:
-                        if extensions and mode in ("file", "both"):
-                            if child.suffix.lower() not in extensions:
-                                continue
-                        entries.append(("file", child.name, child))
-            except PermissionError:
-                pass
+            entries = _list_entries(p, extensions, mode)
 
             with listing:
                 for kind, name, ep in entries:

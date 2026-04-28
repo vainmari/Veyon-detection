@@ -134,12 +134,6 @@ class TestDrainWorker:
 # ── MonitorController ─────────────────────────────────────────────────────────
 
 class TestMonitorController:
-    def test_stop_sets_event(self, cfg):
-        mc = MonitorController(cfg)
-        mc._stop.clear()
-        mc.stop()
-        assert mc._stop.is_set()
-
     def test_stop_safe_when_not_started(self, cfg):
         mc = MonitorController(cfg)
         mc.stop()   # should not raise

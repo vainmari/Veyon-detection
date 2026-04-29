@@ -76,7 +76,6 @@ def collect_hidden_imports() -> list[str]:
         "app.pages.users",
         "app.pages._nav",
         "app.pages._snapshot",
-        "app.pages._file_browser",
         # Auth / DB
         "bcrypt",
         "bcrypt._bcrypt",
@@ -89,7 +88,6 @@ def collect_hidden_imports() -> list[str]:
         "torch.nn",
         "torch.jit",
         # ONNX
-        "onnx",
         "onnxruntime",
         "onnxruntime.capi._pybind_state",
         # YAML

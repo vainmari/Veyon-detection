@@ -243,8 +243,6 @@ class MonitorController:
     def _detect_worker(self) -> None:
         cfg    = self.cfg
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        max_b  = 32 if device == "cuda" else 16
-        self._log(f"Detection engine: {device}  |  max_batch={max_b}")
 
         # Resolve which model to load: schedule-pinned > active model > cfg fallback
         if self.model_id is not None:
@@ -270,6 +268,16 @@ class MonitorController:
             active_model_id = active["id"] if active else None
 
         model = yolo.get_model(model_path)
+
+        # Determine max batch size. ONNX models may have a static batch dimension
+        # (e.g. 1) that ONNX Runtime won't exceed — inspect the model to find out.
+        # Dynamic-batch ONNX and .pt models get the GPU/CPU hardware defaults.
+        if str(model_path).lower().endswith(".onnx"):
+            static_b = yolo.onnx_static_batch_size(model_path)
+            max_b    = static_b if static_b is not None else (32 if device == "cuda" else 16)
+        else:
+            max_b = 32 if device == "cuda" else 16
+        self._log(f"Detection engine: {device}  |  max_batch={max_b}")
 
         # FP16 on CUDA only — halves VRAM and ~30% faster on nvidia. On CPU
         # it's slower (no native fp16 path in most CPU kernels) so we skip it.

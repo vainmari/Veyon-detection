@@ -293,7 +293,7 @@ def _notification_bell() -> None:
     def _render_row(n: dict) -> None:
         color  = n.get("class_color", "#888")
         is_new = not bool(n["is_read"])
-        bg     = "bg-gray-800" if is_new else ""
+        bg     = "bg-blue-50 dark:bg-gray-800" if is_new else ""
 
         with ui.card().classes(
             f"w-full rounded-none border-0 shadow-none {bg}"
@@ -307,9 +307,9 @@ def _notification_bell() -> None:
                             f"background:{color}; color:#fff; font-size:0.68rem;")
                         if is_new:
                             ui.badge("NEW").props("rounded color=orange")
-                    ui.label(f"🖥  {n['computer']}").classes("text-xs text-gray-300")
-                    ui.label(f"👤 {n['student']}").classes("text-xs text-gray-300")
-                    ui.label(n["created_at"]).classes("text-xs text-gray-500")
+                    ui.label(f"🖥  {n['computer']}").classes("text-xs text-gray-700 dark:text-gray-300")
+                    ui.label(f"👤 {n['student']}").classes("text-xs text-gray-700 dark:text-gray-300")
+                    ui.label(n["created_at"]).classes("text-xs text-gray-500 dark:text-gray-400")
 
                 if n.get("has_frame"):
                     meta_str = (

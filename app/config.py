@@ -38,6 +38,10 @@ DEFAULTS: dict = {
     "detect_iou":       "0.20",
     "detect_imgsz":     "480",
     "keep_top1":        True,
+    # ── Detection performance ───────────────────────────────────────────────────
+    "batch_max_cuda":        "32",   # max frames per inference call on GPU
+    "batch_max_cpu":         "16",   # max frames per inference call on CPU
+    "detect_cycle_timing":   False,  # log full capture→detection latency
     # ── Alert behaviour ────────────────────────────────────────────────────────
     "alert_threshold":  "1",
 }
@@ -90,8 +94,11 @@ def collect_cfg() -> dict:
         "detect_conf":      float(s["detect_conf"]),
         "detect_iou":       float(s["detect_iou"]),
         "detect_imgsz":     int(s["detect_imgsz"]),
-        "alert_threshold":  max(1, int(s.get("alert_threshold", 1))),
-        "key_data":         "",
+        "alert_threshold":     max(1, int(s.get("alert_threshold", 1))),
+        "batch_max_cuda":      max(1, int(s.get("batch_max_cuda", 32))),
+        "batch_max_cpu":       max(1, int(s.get("batch_max_cpu", 16))),
+        "detect_cycle_timing": bool(s.get("detect_cycle_timing", False)),
+        "key_data":            "",
     }
     if s.get("auth_method", "key") == "key":
         try:

@@ -28,7 +28,7 @@ from datetime import datetime
 from pathlib import Path
 
 import yaml
-from nicegui import events, ui
+from nicegui import app as nicegui_app, events, ui
 
 import app.state as state
 from app.config import apply_active_model
@@ -767,10 +767,10 @@ def _model_library() -> None:
                         (t("models_step2_classes"),      str(a["nc"])),
                         (t("models_step2_splits_found"), ", ".join(a["splits"].keys()) or "—"),
                     ]:
-                        with ui.card().classes("bg-gray-800 px-4 py-3 min-w-36"):
-                            ui.label(lbl).classes("text-xs text-gray-400")
+                        with ui.card().classes("bg-gray-100 dark:bg-gray-800 px-4 py-3 min-w-36"):
+                            ui.label(lbl).classes("text-xs text-gray-500 dark:text-gray-400")
                             ui.label(val).classes(
-                                "text-xl font-bold text-blue-300")
+                                "text-xl font-bold text-blue-600 dark:text-blue-300")
 
                 # Class reconciliation table
                 ui.label(t("models_ft_reconcile_title")).classes(
@@ -1363,11 +1363,11 @@ def _step_analysis(ws: dict, refresh, post_start_fn=None) -> None:
                 (t("models_step2_classes"),      str(a["nc"])),
                 (t("models_step2_splits_found"), ", ".join(a["splits"].keys()) or "—"),
             ]:
-                with ui.card().classes("bg-gray-800 px-4 py-3 min-w-36"):
-                    ui.label(label).classes("text-xs text-gray-400")
-                    ui.label(val).classes("text-xl font-bold text-blue-300")
-            with ui.card().classes("bg-gray-800 px-4 py-3 min-w-36"):
-                ui.label(t("models_step2_src_format")).classes("text-xs text-gray-400")
+                with ui.card().classes("bg-gray-100 dark:bg-gray-800 px-4 py-3 min-w-36"):
+                    ui.label(label).classes("text-xs text-gray-500 dark:text-gray-400")
+                    ui.label(val).classes("text-xl font-bold text-blue-600 dark:text-blue-300")
+            with ui.card().classes("bg-gray-100 dark:bg-gray-800 px-4 py-3 min-w-36"):
+                ui.label(t("models_step2_src_format")).classes("text-xs text-gray-500 dark:text-gray-400")
                 ui.badge(fmt, color=fmt_color).classes("text-sm mt-1")
             if fmt == "COCO":
                 with ui.card().classes(
@@ -1384,32 +1384,35 @@ def _step_analysis(ws: dict, refresh, post_start_fn=None) -> None:
                 "text-sm font-semibold text-gray-600 dark:text-gray-400 mb-2")
             with ui.row().classes("gap-4 flex-wrap"):
                 for split, info in a["splits"].items():
-                    with ui.card().classes("bg-gray-800 px-3 py-2 min-w-28"):
-                        ui.label(split).classes("text-xs text-gray-400 uppercase")
+                    with ui.card().classes("bg-gray-100 dark:bg-gray-800 px-3 py-2 min-w-28"):
+                        ui.label(split).classes("text-xs text-gray-500 dark:text-gray-400 uppercase")
                         ui.label(t("models_step2_images").format(
                             n=info["images"])).classes(
-                            "text-sm font-mono text-green-300")
+                            "text-sm font-mono text-green-600 dark:text-green-300")
 
         cc = a["class_counts"]
         with ui.card().classes("w-full"):
             ui.label(t("models_step2_class_dist")).classes(
                 "text-sm font-semibold text-gray-600 dark:text-gray-400 mb-2")
+            _is_dark = nicegui_app.storage.user.get("dark_mode", True)
+            _ac = "#ccc" if _is_dark else "#555"
+            _lc = "#aaa" if _is_dark else "#555"
             ui.echart({
                 "tooltip": {"trigger": "axis",
                             "axisPointer": {"type": "shadow"}},
                 "grid":    {"left": "3%", "right": "4%",
                             "bottom": "3%", "containLabel": True},
                 "xAxis":   {"type": "value",
-                            "axisLabel": {"color": "#aaa"}},
+                            "axisLabel": {"color": _ac}},
                 "yAxis":   {"type": "category",
                             "data": [c["name"] for c in cc],
-                            "axisLabel": {"color": "#ccc"}},
+                            "axisLabel": {"color": _ac}},
                 "series":  [{"type": "bar",
                              "data": [c["count"] for c in cc],
                              "itemStyle": {"color": "#4b8cf5"},
                              "barMaxWidth": 28,
                              "label": {"show": True, "position": "right",
-                                       "color": "#aaa", "fontSize": 11}}],
+                                       "color": _lc, "fontSize": 11}}],
             }).classes("w-full").style(
                 f"height:{max(180, len(cc) * 32)}px")
 

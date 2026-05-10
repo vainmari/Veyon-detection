@@ -145,6 +145,15 @@ def page_settings() -> None:
         row("detect_iou",  t("settings_detect_iou"))
         row("keep_top1",   t("settings_keep_top1"), kind="bool")
 
+        # ── Detection Performance ─────────────────────────────────────────────
+        section(t("settings_detect_perf"))
+        row("batch_max_cuda",       t("settings_batch_max_cuda"))
+        row("batch_max_cpu",        t("settings_batch_max_cpu"))
+        row("detect_cycle_timing",  t("settings_detect_cycle_timing"), kind="bool")
+        with ui.row().classes("w-full"):
+            ui.label(t("settings_detect_cycle_timing_hint")).classes(
+                "text-xs text-gray-500 dark:text-gray-500")
+
         # ── Alert Behaviour ───────────────────────────────────────────────────
         section(t("settings_alert_behaviour"))
         row("alert_threshold", t("settings_alert_threshold"))

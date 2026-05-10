@@ -74,8 +74,9 @@ class MonitorController:
         self.schedule_id = schedule_id
         self._stop = threading.Event()
         self._proc: Optional[object] = None
-        # raw_q carries (computer_name, raw_jpeg_bytes) decoded in detect worker
-        self._raw_q: queue.Queue[tuple[str, bytes]] = queue.Queue(maxsize=128)
+        # raw_q carries (computer_name, raw_jpeg_bytes, capture_ts) where
+        # capture_ts is time.perf_counter() at the moment the frame was enqueued.
+        self._raw_q: queue.Queue[tuple[str, bytes, float]] = queue.Queue(maxsize=128)
 
     # ── Public ────────────────────────────────────────────────────────────────
 
@@ -232,7 +233,7 @@ class MonitorController:
                 state.computer_os_usernames[name] = None
 
             try:
-                self._raw_q.put((name, raw), timeout=1.0)
+                self._raw_q.put((name, raw, time.perf_counter()), timeout=1.0)
             except queue.Full:
                 pass  # back-pressure: drop frame
 
@@ -271,12 +272,13 @@ class MonitorController:
 
         # Determine max batch size. ONNX models may have a static batch dimension
         # (e.g. 1) that ONNX Runtime won't exceed — inspect the model to find out.
-        # Dynamic-batch ONNX and .pt models get the GPU/CPU hardware defaults.
+        # Dynamic-batch ONNX and .pt models use the user-configured hardware limits.
+        hw_max = cfg["batch_max_cuda"] if device == "cuda" else cfg["batch_max_cpu"]
         if str(model_path).lower().endswith(".onnx"):
             static_b = yolo.onnx_static_batch_size(model_path)
-            max_b    = static_b if static_b is not None else (32 if device == "cuda" else 16)
+            max_b    = static_b if static_b is not None else hw_max
         else:
-            max_b = 32 if device == "cuda" else 16
+            max_b = hw_max
         self._log(f"Detection engine: {device}  |  max_batch={max_b}")
 
         # FP16 on CUDA only — halves VRAM and ~30% faster on nvidia. On CPU
@@ -303,28 +305,34 @@ class MonitorController:
         # Publish which model is actually running so UI pages can reflect it.
         state.running_model_id = active_model_id
 
+        cycle_timing = cfg.get("detect_cycle_timing", False)
+
         try:
             while not self._stop.is_set():
                 raw_batch:  list[bytes] = []
                 name_batch: list[str]   = []
+                ts_batch:   list[float] = []
 
                 try:
                     while len(raw_batch) < max_b:
-                        n, raw = self._raw_q.get(timeout=0.05)
+                        n, raw, ts = self._raw_q.get(timeout=0.05)
                         raw_batch.append(raw)
                         name_batch.append(n)
+                        ts_batch.append(ts)
                 except queue.Empty:
                     if not raw_batch:
                         continue
 
-                # Decode all images in batch
+                # Decode all images in batch; keep capture timestamps in sync
                 imgs         = []
                 valid_names  = []
-                for n, raw in zip(name_batch, raw_batch):
+                valid_ts:  list[float] = []
+                for n, raw, ts in zip(name_batch, raw_batch, ts_batch):
                     img = veyon.decode_image(raw)
                     if img is not None:
                         imgs.append(img)
                         valid_names.append(n)
+                        valid_ts.append(ts)
 
                 if not imgs:
                     continue
@@ -337,6 +345,9 @@ class MonitorController:
                         iou=det_iou,
                         verbose=False, device=device, rect=True, half=use_half,
                     )
+                    # Snapshot immediately after inference returns — this is the
+                    # "detection result formed" point for cycle timing purposes.
+                    t_infer_done = time.perf_counter()
 
                     # Re-fetch active model each batch in case it changed
                     if active_model_id is None:
@@ -414,6 +425,15 @@ class MonitorController:
                             _conn().commit()
                         except Exception as _ce:
                             self._log(f"⚠ DB commit failed: {_ce}")
+
+                    if cycle_timing and valid_ts:
+                        lats = [(t_infer_done - ts) * 1000 for ts in valid_ts]
+                        avg  = sum(lats) / len(lats)
+                        self._log(
+                            f"⏱ Cycle: avg={avg:.0f} ms  "
+                            f"min={min(lats):.0f} ms  max={max(lats):.0f} ms"
+                            + (f"  (n={len(lats)})" if len(lats) > 1 else "")
+                        )
 
                     for line in batch_log:
                         self._log(line)

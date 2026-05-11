@@ -600,6 +600,25 @@ def prepare_splits(analysis: dict) -> str:
 
 # ── Fine-tune helpers ─────────────────────────────────────────────────────────
 
+def _resolve_pt(pt_path: str) -> str:
+    """Return a path to the .pt file that actually exists on disk.
+
+    Ultralytics saves to runs/detect/<project>/<name> when given a relative
+    project path, but older DB entries only stored <project>/<name>.  Try the
+    literal path first, then the runs/detect/ prefix as a fallback.
+    """
+    p = Path(pt_path)
+    if p.is_absolute():
+        return str(p)
+    resolved = p.resolve()
+    if resolved.exists():
+        return str(resolved)
+    alt = Path("runs") / "detect" / p
+    if alt.exists():
+        return str(alt.resolve())
+    return str(resolved)
+
+
 def _yaml_for_base(base_model_str: str) -> Optional[str]:
     """
     Given a base model filename like 'yolo11n.pt', return the matching
@@ -821,6 +840,7 @@ class TrainingWorker:
         try:
             source_pt = cfg.get("source_pt_path")
             if source_pt:
+                source_pt = _resolve_pt(source_pt)
                 source_nc = cfg.get("source_model_nc", cfg["nc"])
                 if source_nc == cfg["nc"]:
                     model = YOLO(source_pt)
@@ -962,7 +982,7 @@ class TrainingWorker:
             m5095 = float(rd.get("metrics/mAP50-95(B)",   0))
             prec  = float(rd.get("metrics/precision(B)",  0))
             rec   = float(rd.get("metrics/recall(B)",     0))
-            pt_p  = str(MODELS_DIR / run_name / "weights" / "best.pt")
+            pt_p  = str((Path(model.trainer.save_dir) / "weights" / "best.pt").resolve())
 
             from app.db.database import create_ml_model
             model_id = create_ml_model(

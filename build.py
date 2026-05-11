@@ -123,7 +123,6 @@ def main() -> None:
 
     # Modules to exclude (trims ~300 MB from the bundle)
     for exc in (
-        "matplotlib", "pandas", "scipy", "sklearn",
         "IPython", "jupyter", "notebook",
         "PIL.ImageTk", "tkinter", "wx",
         "PyQt5", "PyQt6", "PySide2", "PySide6",

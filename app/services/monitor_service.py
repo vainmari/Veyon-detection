@@ -19,7 +19,10 @@ Queue discipline
 """
 from __future__ import annotations
 
+import csv
+import os
 import queue
+import sys
 import threading
 import time
 from datetime import datetime
@@ -184,14 +187,23 @@ class MonitorController:
 
     def _io_worker(self, name: str, host: str, base_url: str) -> None:
         """
-        Pure network thread: authenticate, grab framebuffer, fetch logged-in
-        OS username, push raw JPEG bytes onto _raw_q.
-        No decoding or inference happens here.
+        Per-computer network + decode thread: authenticate, grab framebuffer,
+        decode JPEG, push (name, raw_bytes, np_image, ts) onto _raw_q. Decoding
+        in this worker (instead of the detect thread) parallelizes JPEG decode
+        across all monitored computers and removes ~3-5 ms × N of dead time
+        from the hot inference path.
+
+        OS-username lookup is cached and refreshed every USER_REFRESH_SEC
+        seconds — it costs an HTTP /user call + a DB query, and the logged-in
+        user almost never changes between consecutive frames.
         """
+        USER_REFRESH_SEC = 30.0
+
         cfg      = self.cfg
         session  = requests.Session()
         session.headers["Connection"] = "keep-alive"
         conn_uid: Optional[str] = None
+        last_user_check = 0.0
 
         while not self._stop.is_set():
 
@@ -203,6 +215,8 @@ class MonitorController:
                     self._stop.wait(10)
                     continue
                 time.sleep(2)
+                # Force a user refresh on the next iteration after re-auth
+                last_user_check = 0.0
 
             raw = veyon.grab_framebuffer(
                 session, base_url, conn_uid,
@@ -213,29 +227,53 @@ class MonitorController:
                 conn_uid = None
                 continue
 
-            os_login_raw = veyon.get_logged_user(session, base_url, conn_uid)
-            if os_login_raw:
-                os_login = _parse_os_username(os_login_raw)
-                db_user  = get_user_by_username(os_login)
-                if db_user is None:
-                    # Auto-create an inactive placeholder so events are linked
-                    # and the name is shown in the dashboard immediately.
-                    new_id  = auto_create_student(os_login)
-                    db_user = get_user_by_id(new_id)
-                    self._log(
-                        f"[{name}] OS user '{os_login}' — "
-                        "auto-created inactive student account"
-                    )
-                state.computer_users[name]        = db_user["id"] if db_user else None
-                state.computer_os_usernames[name] = os_login
-            else:
-                state.computer_users[name]        = None
-                state.computer_os_usernames[name] = None
+            # ── Latency-measurement start point ──────────────────────────────
+            # ts marks "frame received from monitored host". From this point
+            # on, every step (JPEG decode, queue wait, batch fill, inference)
+            # is on our side and therefore measurable. The measurement ends at
+            # t_infer_done in _detect_worker, immediately after model() returns.
+            # Latency = t_infer_done - ts represents the full local processing
+            # pipeline, excluding network round-trip and remote screen capture
+            # (which we cannot instrument from the client side).
+            ts_capture = time.perf_counter()
+
+            # Decode in this worker (parallel across IO threads) so the detect
+            # worker doesn't burn time decoding N frames serially.
+            img = veyon.decode_image(raw)
+            if img is None:
+                self._stop.wait(float(cfg["interval"]))
+                continue
+
+            now = time.perf_counter()
+            if now - last_user_check >= USER_REFRESH_SEC:
+                last_user_check = now
+                os_login_raw = veyon.get_logged_user(session, base_url, conn_uid)
+                if os_login_raw:
+                    os_login = _parse_os_username(os_login_raw)
+                    db_user  = get_user_by_username(os_login)
+                    if db_user is None:
+                        # Auto-create an inactive placeholder so events are linked
+                        # and the name is shown in the dashboard immediately.
+                        new_id  = auto_create_student(os_login)
+                        db_user = get_user_by_id(new_id)
+                        self._log(
+                            f"[{name}] OS user '{os_login}' — "
+                            "auto-created inactive student account"
+                        )
+                    state.computer_users[name]        = db_user["id"] if db_user else None
+                    state.computer_os_usernames[name] = os_login
+                else:
+                    state.computer_users[name]        = None
+                    state.computer_os_usernames[name] = None
 
             try:
-                self._raw_q.put((name, raw, time.perf_counter()), timeout=1.0)
+                # Use the ts_capture taken right after grab_framebuffer (above),
+                # NOT a fresh timestamp here — the goal is to measure the whole
+                # local pipeline, including the JPEG decode and any user-lookup
+                # work done in this worker before the frame is queued.
+                self._raw_q.put((name, raw, img, ts_capture), timeout=1.0)
             except queue.Full:
-                pass  # back-pressure: drop frame
+                pass  # back-pressure: drop frame (excluded from latency stats)
 
             self._stop.wait(float(cfg["interval"]))
 
@@ -305,37 +343,44 @@ class MonitorController:
         # Publish which model is actually running so UI pages can reflect it.
         state.running_model_id = active_model_id
 
-        cycle_timing = cfg.get("detect_cycle_timing", False)
+        cycle_timing  = cfg.get("detect_cycle_timing", False)
+        _agg_lats:  list[float] = []
+        _capture_interval = float(cfg["interval"])
+        _agg_flush  = time.perf_counter() + _capture_interval
 
         try:
             while not self._stop.is_set():
-                raw_batch:  list[bytes] = []
-                name_batch: list[str]   = []
-                ts_batch:   list[float] = []
+                # IO workers already decoded the JPEG, so the detect path skips
+                # cv2.imdecode entirely — frames arrive as (name, raw_bytes, np_image, ts).
+                raw_batch:  list[bytes]      = []
+                imgs:       list[np.ndarray] = []
+                valid_names: list[str]       = []
+                valid_ts:   list[float]      = []
+
+                # Block for the first frame; once we have one, drain whatever
+                # else is *already* in the queue without waiting. The previous
+                # 50 ms-per-iteration timeout dominated single-computer latency
+                # (a fixed ~50 ms wait per cycle for stragglers that almost
+                # never came). This keeps natural batching when frames arrive
+                # close together but adds zero idle time when they don't.
+                try:
+                    n, raw, img, ts = self._raw_q.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+                raw_batch.append(raw)
+                imgs.append(img)
+                valid_names.append(n)
+                valid_ts.append(ts)
 
                 try:
-                    while len(raw_batch) < max_b:
-                        n, raw, ts = self._raw_q.get(timeout=0.05)
+                    while len(imgs) < max_b:
+                        n, raw, img, ts = self._raw_q.get_nowait()
                         raw_batch.append(raw)
-                        name_batch.append(n)
-                        ts_batch.append(ts)
-                except queue.Empty:
-                    if not raw_batch:
-                        continue
-
-                # Decode all images in batch; keep capture timestamps in sync
-                imgs         = []
-                valid_names  = []
-                valid_ts:  list[float] = []
-                for n, raw, ts in zip(name_batch, raw_batch, ts_batch):
-                    img = veyon.decode_image(raw)
-                    if img is not None:
                         imgs.append(img)
                         valid_names.append(n)
                         valid_ts.append(ts)
-
-                if not imgs:
-                    continue
+                except queue.Empty:
+                    pass
 
                 try:
                     results = model(
@@ -360,13 +405,15 @@ class MonitorController:
                     batch_log: list[str] = []
                     wrote_anything = False
 
-                    for comp_name, res, img_bgr in zip(valid_names, results, imgs):
+                    for comp_name, raw_bytes, res, img_bgr in zip(
+                        valid_names, raw_batch, results, imgs
+                    ):
                         annotated, dets = postprocess(res, img_bgr, keep_top1)
 
-                        # Encode raw JPEG once. When there are no detections
-                        # `annotated is img_bgr`, so the same bytes serve the DB
-                        # and the preview — no second encode.
-                        raw_bytes = encode_jpeg(img_bgr, img_q_put)
+                        # Veyon already returned JPEG bytes (`raw_bytes`); reuse
+                        # them for the DB blob and the unannotated preview. We
+                        # only run cv2.imencode when there are detections to
+                        # encode — that's the one image we have to materialize.
                         ann_bytes = raw_bytes if not dets else encode_jpeg(annotated, img_q_put)
 
                         computer_id = state.computer_ids.get(comp_name)
@@ -427,13 +474,23 @@ class MonitorController:
                             self._log(f"⚠ DB commit failed: {_ce}")
 
                     if cycle_timing and valid_ts:
-                        lats = [(t_infer_done - ts) * 1000 for ts in valid_ts]
-                        avg  = sum(lats) / len(lats)
-                        self._log(
-                            f"⏱ Cycle: avg={avg:.0f} ms  "
-                            f"min={min(lats):.0f} ms  max={max(lats):.0f} ms"
-                            + (f"  (n={len(lats)})" if len(lats) > 1 else "")
+                        _agg_lats.extend(
+                            (t_infer_done - ts) * 1000 for ts in valid_ts
                         )
+                        now = time.perf_counter()
+                        if now >= _agg_flush and _agg_lats:
+                            avg        = sum(_agg_lats) / len(_agg_lats)
+                            n_tracked  = len(state.latest_frames) or len(_agg_lats)
+                            est_30     = avg * 30
+                            self._log(
+                                f"⏱ Cycle: avg={avg:.0f} ms  "
+                                f"min={min(_agg_lats):.0f} ms  max={max(_agg_lats):.0f} ms  "
+                                f"tracked={n_tracked}  est30={est_30:.0f} ms"
+                            )
+                            _write_latency_csv(avg, min(_agg_lats), max(_agg_lats),
+                                               n_tracked, max_b, est_30)
+                            _agg_lats.clear()
+                            _agg_flush = now + _capture_interval
 
                     for line in batch_log:
                         self._log(line)
@@ -444,6 +501,37 @@ class MonitorController:
         finally:
             # Always clear the running model so the UI stops reflecting it.
             state.running_model_id = None
+
+
+# ── Latency CSV logger ───────────────────────────────────────────────────────
+
+_LATENCY_CSV = os.path.join(
+    os.path.dirname(sys.executable) if getattr(sys, "frozen", False)
+    else os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+    "latency_log.csv",
+)
+_CSV_HEADER  = [
+    "timestamp",        # local wall-clock at flush time (HH:MM:SS)
+    "avg_ms",           # mean per-frame latency: t_infer_done − ts_capture
+    "min_ms",           # min per-frame latency in this aggregation window
+    "max_ms",           # max per-frame latency in this aggregation window
+    "n_tracked",        # number of computers actively delivering frames
+    "batch_size",       # max frames per inference call (hardware/model limit)
+    "linear_proj_30_ms",# avg_ms × 30: linear scaling projection, NOT a prediction
+]
+
+def _write_latency_csv(avg: float, mn: float, mx: float,
+                       n_tracked: int, batch_size: int, est_30: float) -> None:
+    write_header = not os.path.exists(_LATENCY_CSV)
+    with open(_LATENCY_CSV, "a", newline="") as f:
+        w = csv.writer(f)
+        if write_header:
+            w.writerow(_CSV_HEADER)
+        w.writerow([
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            f"{avg:.1f}", f"{mn:.1f}", f"{mx:.1f}",
+            n_tracked, batch_size, f"{est_30:.1f}",
+        ])
 
 
 # ── Background drain worker ───────────────────────────────────────────────────

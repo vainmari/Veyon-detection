@@ -12,28 +12,42 @@ Columns
   entity    — table / domain, e.g. "user", "ml_model", "schedule"
   entity_id — PK of the affected row (nullable)
   detail    — free-form JSON or text with extra context
+
+Two write entry points (otherwise identical):
+  _insert_audit  → caller owns the transaction; the audit row joins it.
+  log_action     → standalone write that commits immediately.
 """
 from __future__ import annotations
 
+import sqlite3
 from typing import Optional
 
 from app.db._core import _conn, _now
 
+_INSERT_SQL = (
+    "INSERT INTO audit_log (user_id, action, entity, entity_id, detail, created_at) "
+    "VALUES (?, ?, ?, ?, ?, ?)"
+)
+
 
 def _insert_audit(
-    c,
+    c:         sqlite3.Connection,
     action:    str,
     user_id:   Optional[int] = None,
     entity:    Optional[str] = None,
     entity_id: Optional[int] = None,
     detail:    Optional[str] = None,
-) -> None:
-    """Insert an audit row into an already-open connection without committing."""
-    c.execute(
-        "INSERT INTO audit_log (user_id, action, entity, entity_id, detail, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
+) -> int:
+    """Insert an audit row into an already-open connection without committing.
+
+    Returns the new audit row id so callers that want to log a side-effect
+    (e.g. "audit_id={n}") can do so without an extra round-trip.
+    """
+    cur = c.execute(
+        _INSERT_SQL,
         (user_id, action, entity, entity_id, detail, _now()),
     )
+    return cur.lastrowid
 
 
 def log_action(
@@ -43,14 +57,11 @@ def log_action(
     entity_id: Optional[int] = None,
     detail:    Optional[str] = None,
 ) -> int:
+    """Standalone audit write: insert + commit in one call."""
     c = _conn()
-    cur = c.execute(
-        "INSERT INTO audit_log (user_id, action, entity, entity_id, detail, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (user_id, action, entity, entity_id, detail, _now()),
-    )
+    audit_id = _insert_audit(c, action, user_id, entity, entity_id, detail)
     c.commit()
-    return cur.lastrowid
+    return audit_id
 
 
 def list_audit_log(

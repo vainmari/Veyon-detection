@@ -4,14 +4,23 @@ app/main.py
 Application entry point.
 Registers startup hooks and imports all pages (side-effect: @ui.page routes fire).
 """
+import logging
+import sys
 import threading
 
 from nicegui import app as nicegui_app, ui
 
-from app.config import STORAGE_SECRET
-from app.db.database import ensure_default_teacher, init_db, seed_classes
+from app.config import (
+    INITIAL_ADMIN_PASSWORD,
+    INITIAL_ADMIN_USERNAME,
+    STORAGE_SECRET,
+)
+from app.db._core import _conn
+from app.db.database import ensure_default_admin, init_db, seed_classes
 from app.services.monitor_service import drain_worker
 from app.services.schedule_service import start_scheduler
+
+log = logging.getLogger(__name__)
 
 # Register pages
 import app.pages.login      # noqa: F401
@@ -27,11 +36,48 @@ import app.pages.settings   # noqa: F401
 import app.pages.users      # noqa: F401
 
 
+def _bootstrap_admin() -> None:
+    """
+    On a fresh database (zero users), create the initial admin account
+    using credentials supplied via the INITIAL_ADMIN_USERNAME /
+    INITIAL_ADMIN_PASSWORD environment variables.
+
+    Refuses to continue silently:
+      • If a user already exists → no-op, returns immediately.
+      • If DB is empty AND INITIAL_ADMIN_PASSWORD is unset → prints a clear
+        instruction and exits with a non-zero status code. This prevents the
+        old "admin/admin auto-created" footgun while still giving operators
+        a one-shot setup path.
+    """
+    c = _conn()
+    user_count = c.execute("SELECT COUNT(*) FROM user").fetchone()[0]
+    if user_count > 0:
+        return  # already initialised — env var is irrelevant from now on
+
+    if not INITIAL_ADMIN_PASSWORD:
+        sys.stderr.write(
+            "\n"
+            "ERROR: The database has no users yet and INITIAL_ADMIN_PASSWORD\n"
+            "is not set. Add the following to your .env file:\n\n"
+            "    INITIAL_ADMIN_USERNAME=admin\n"
+            "    INITIAL_ADMIN_PASSWORD=<choose a strong password>\n\n"
+            "Then restart. The variable is only consulted on a fresh database;\n"
+            "once an account exists you can manage users through the UI.\n"
+        )
+        sys.exit(1)
+
+    ensure_default_admin(INITIAL_ADMIN_USERNAME, INITIAL_ADMIN_PASSWORD)
+    log.info(
+        "bootstrap: created initial admin %r from environment variable",
+        INITIAL_ADMIN_USERNAME,
+    )
+
+
 @nicegui_app.on_startup
 def _startup() -> None:
     init_db()
     seed_classes()
-    ensure_default_teacher()  # creates admin/admin if no users exist yet
+    _bootstrap_admin()
     threading.Thread(target=drain_worker, daemon=True, name="drain").start()
     start_scheduler()
 

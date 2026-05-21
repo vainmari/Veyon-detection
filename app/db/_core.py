@@ -45,14 +45,3 @@ def _conn() -> sqlite3.Connection:
 
 def _now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-
-def _table_exists(c: sqlite3.Connection, name: str) -> bool:
-    return c.execute(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
-        (name,),
-    ).fetchone()[0] > 0
-
-
-def _cols(c: sqlite3.Connection, table: str) -> set[str]:
-    return {r[1] for r in c.execute(f"PRAGMA table_info({table})").fetchall()}

@@ -8,6 +8,8 @@ assign computers to them, and manage them here.
 Computers can belong to multiple groups (many-to-many).
 Groups are used by Schedules to target a set of computers.
 """
+import asyncio
+
 from nicegui import ui
 
 from app.core.auth import require_auth
@@ -144,7 +146,16 @@ def page_groups() -> None:
                 ui.button(t("groups_cancel"), on_click=assign_dlg.close).props("flat")
 
         # ── Veyon location import ─────────────────────────────────────────────
-        def _import_veyon_locations() -> None:
+        async def _import_veyon_locations() -> None:
+            """
+            Import Veyon-defined locations as groups.
+
+            list_locations() spawns `veyon-cli config get …` and waits for
+            output — that's a blocking subprocess call. Running it on the UI
+            thread freezes the page for the full timeout window (up to 10 s)
+            on a misconfigured CLI. run_in_executor pushes the work to a
+            worker thread; the UI keeps painting.
+            """
             import subprocess
             from app.config import get_settings
             from app.core.veyon import list_locations
@@ -153,8 +164,11 @@ def page_groups() -> None:
             if not veyon_cli:
                 ui.notify(t("groups_veyon_cli_missing"), type="negative")
                 return
+            loop = asyncio.get_event_loop()
             try:
-                locations = list_locations(veyon_cli)
+                locations = await loop.run_in_executor(
+                    None, list_locations, veyon_cli,
+                )
             except FileNotFoundError:
                 ui.notify(t("groups_veyon_not_found").format(path=veyon_cli), type="negative")
                 return
@@ -193,7 +207,8 @@ def page_groups() -> None:
             ).classes("w-full font-mono text-xs")
             ui.button(t("groups_raw_close"), on_click=raw_dlg.close).props("flat dense")
 
-        def _show_raw() -> None:
+        async def _show_raw() -> None:
+            """Show the raw veyon-cli JSON. Run subprocess off the UI thread."""
             import json as _json
             import subprocess
             from app.config import get_settings
@@ -202,21 +217,28 @@ def page_groups() -> None:
             if not veyon_cli:
                 ui.notify(t("groups_veyon_cli_missing"), type="negative")
                 return
-            try:
-                r = subprocess.run(
-                    [veyon_cli, "config", "get", "BuiltinDirectory/NetworkObjects"],
-                    capture_output=True, text=True, timeout=10,
-                )
-                raw = r.stdout.strip()
-                if "=" in raw:
-                    raw = raw.split("=", 1)[1].strip()
+
+            def _run() -> str:
                 try:
-                    raw = _json.dumps(_json.loads(raw), indent=2)
-                except Exception:
-                    pass
-                raw_area.set_value(raw or r.stderr or "(empty)")
-            except Exception as e:
-                raw_area.set_value(str(e))
+                    r = subprocess.run(
+                        [veyon_cli, "config", "get", "BuiltinDirectory/NetworkObjects"],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    raw = r.stdout.strip()
+                    if "=" in raw:
+                        raw = raw.split("=", 1)[1].strip()
+                    try:
+                        raw = _json.dumps(_json.loads(raw), indent=2)
+                    except Exception:
+                        pass
+                    return raw or r.stderr or "(empty)"
+                except subprocess.TimeoutExpired:
+                    return "(veyon-cli timed out after 10 s)"
+                except Exception as e:
+                    return f"(error: {e})"
+
+            loop = asyncio.get_event_loop()
+            raw_area.set_value(await loop.run_in_executor(None, _run))
             raw_dlg.open()
 
         # ── Groups panel ──────────────────────────────────────────────────────

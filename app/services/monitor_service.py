@@ -348,6 +348,11 @@ class MonitorController:
         _capture_interval = float(cfg["interval"])
         _agg_flush  = time.perf_counter() + _capture_interval
 
+        # Publish the capture interval so state.is_computer_online() can scale
+        # its threshold to whatever the user has configured.
+        state.capture_interval = _capture_interval
+        state.computer_last_frame_ts.clear()
+
         try:
             while not self._stop.is_set():
                 # IO workers already decoded the JPEG, so the detect path skips
@@ -473,6 +478,13 @@ class MonitorController:
                         except Exception as _ce:
                             self._log(f"⚠ DB commit failed: {_ce}")
 
+                    # Stamp "last frame seen" for every computer in this batch.
+                    # state.is_computer_online() reads these to decide whether
+                    # a computer has gone silent.
+                    _now_stamp = time.perf_counter()
+                    for _n in valid_names:
+                        state.computer_last_frame_ts[_n] = _now_stamp
+
                     if cycle_timing and valid_ts:
                         _agg_lats.extend(
                             (t_infer_done - ts) * 1000 for ts in valid_ts
@@ -480,7 +492,14 @@ class MonitorController:
                         now = time.perf_counter()
                         if now >= _agg_flush and _agg_lats:
                             avg        = sum(_agg_lats) / len(_agg_lats)
-                            n_tracked  = len(state.latest_frames) or len(_agg_lats)
+                            # Count only computers that delivered a frame
+                            # recently — offline machines stay in
+                            # state.latest_frames forever and used to inflate
+                            # this count.
+                            n_tracked  = sum(
+                                1 for cn in state.latest_frames
+                                if state.is_computer_online(cn)
+                            ) or len(_agg_lats)
                             est_30     = avg * 30
                             self._log(
                                 f"⏱ Cycle: avg={avg:.0f} ms  "

@@ -37,7 +37,7 @@ from app.db.groups import (                                                 # no
     list_groups, get_group, get_or_create_group,
     create_group, update_group, delete_group,
     add_computer_to_group, remove_computer_from_group,
-    assign_computer_to_group, list_computers_in_group,
+    list_computers_in_group,
 )
 from app.db.schedules import (                                              # noqa: F401
     list_schedules, list_schedules_for_group, get_schedule,

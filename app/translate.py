@@ -15,7 +15,10 @@ Switching language triggers a page reload so all t() calls re-execute.
 """
 from __future__ import annotations
 import json
+import logging
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 # Resolve the path to the locales folder relative to this file
 LOCALES_DIR = Path(__file__).parent / "locales"
@@ -25,7 +28,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {}
 def _load_translations() -> None:
     """Load all .json translation files into memory on startup."""
     if not LOCALES_DIR.exists():
-        print(f"Warning: Locales directory not found at {LOCALES_DIR}")
+        log.warning("Locales directory not found at %s", LOCALES_DIR)
         return
 
     # Iterate over all .json files in the directory
@@ -35,7 +38,7 @@ def _load_translations() -> None:
             with open(file_path, "r", encoding="utf-8") as f:
                 TRANSLATIONS[lang_code] = json.load(f)
         except Exception as e:
-            print(f"Error loading {file_path.name}: {e}")
+            log.error("Error loading %s: %s", file_path.name, e)
 
 # Automatically load translations when this module is imported
 _load_translations()

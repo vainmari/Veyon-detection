@@ -17,6 +17,8 @@ dependencies = [
     "onnx>=1.16",
     "onnxruntime>=1.18",
     "bcrypt>=4.0",
+    "python-dotenv>=1.0",
+    "keyring>=24.0",
 ]
 
 [tool.setuptools.packages.find]

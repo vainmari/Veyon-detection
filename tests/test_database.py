@@ -107,17 +107,26 @@ class TestSchema:
         assert len(db.list_classes()) == 7
 
     def test_default_admin_created_with_admin_role(self, db):
-        """ensure_default_teacher/admin creates an admin-role account."""
-        db.ensure_default_teacher("admin", "admin")
+        """ensure_default_admin creates an admin-role account on an empty DB."""
+        db.ensure_default_admin("admin", "admin-password-1234")
         u = db.get_user_by_username("admin")
         assert u is not None
         assert u["role"] == "admin"
 
     def test_default_admin_no_duplicate(self, db):
-        db.ensure_default_teacher()
-        db.ensure_default_teacher()
+        """Calling ensure_default_admin twice must not create a second account."""
+        db.ensure_default_admin("admin", "admin-password-1234")
+        db.ensure_default_admin("admin", "different-password-9876")
         with sqlite3.connect(db.DB_PATH) as c:
             assert c.execute("SELECT COUNT(*) FROM user").fetchone()[0] == 1
+
+    def test_default_admin_requires_credentials(self, db):
+        """Empty credentials are rejected — no silent fallback to admin/admin."""
+        import pytest
+        with pytest.raises(ValueError):
+            db.ensure_default_admin("", "")
+        with pytest.raises(ValueError):
+            db.ensure_default_admin("admin", "")
 
     def test_migration_safe_on_existing_db(self, db):
         """Running init_db a second time must not crash on an existing schema."""

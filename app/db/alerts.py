@@ -34,12 +34,20 @@ def list_alert_rules() -> list[dict]:
 
 
 def set_alert_rule(class_id: int, enabled: bool) -> None:
+    """Toggle the notification_enabled flag for a single detection class.
+
+    Raises ValueError if `class_id` does not correspond to an existing row —
+    silently no-op'ing was hiding bad UI state (stale dropdown values after a
+    class was deleted, etc.).
+    """
     from app.db.audit import _insert_audit
     c = _conn()
-    c.execute(
+    cur = c.execute(
         "UPDATE detection_class SET notification_enabled = ? WHERE id = ?",
         (1 if enabled else 0, class_id),
     )
+    if cur.rowcount == 0:
+        raise ValueError(f"detection_class id={class_id!r} does not exist")
     _insert_audit(c, "alert.rule", entity="detection_class", entity_id=class_id,
                   detail="enabled" if enabled else "disabled")
     c.commit()

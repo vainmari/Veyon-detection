@@ -15,6 +15,7 @@ Queue sizing
 """
 from __future__ import annotations
 import queue
+import threading
 from typing import TYPE_CHECKING, Optional
 
 import numpy as np
@@ -24,6 +25,13 @@ if TYPE_CHECKING:
     from app.services.training_service import TrainingWorker
 
 monitor: Optional["MonitorController"] = None
+
+# Serialises check-then-assign on `monitor` across threads. Both the UI
+# (dashboard.do_start / do_stop) and the schedule_service daemon flip this
+# variable, so without a lock a teacher clicking Start at the exact moment
+# the scheduler ticks can create two MonitorController instances and leak
+# one of them forever. Always acquire before reading + writing `monitor`.
+monitor_lock: threading.Lock = threading.Lock()
 
 log_q: queue.Queue[str]                          = queue.Queue()
 img_q: queue.Queue[tuple[str, np.ndarray, np.ndarray, list]] = queue.Queue(maxsize=64)
@@ -38,6 +46,31 @@ LOG_CAP = 500
 computer_ids:           dict[str, int]           = {}
 computer_users:         dict[str, Optional[int]] = {}
 computer_os_usernames:  dict[str, Optional[str]] = {}
+
+# Per-computer perf_counter() of the last frame that successfully reached the
+# detect worker. Used to decide whether a computer is "online" (still delivering
+# frames) or has gone silent — see is_computer_online() below.
+computer_last_frame_ts: dict[str, float]         = {}
+
+# Capture interval (seconds). Mirrored from cfg["interval"] by _detect_worker
+# on startup so the offline-detection threshold can scale with the user's
+# configured cadence.
+capture_interval:       float                    = 1.0
+
+# A computer is considered online if a frame was received within this many
+# seconds. We take max(10s, 3 × capture_interval) so brief network blips and
+# the 10-second auth-retry window don't falsely flag a working machine offline.
+def offline_threshold_sec() -> float:
+    return max(10.0, 3.0 * capture_interval)
+
+
+def is_computer_online(name: str) -> bool:
+    """True if a frame from `name` was successfully processed recently."""
+    import time as _time
+    last_ts = computer_last_frame_ts.get(name)
+    if last_ts is None:
+        return False
+    return (_time.perf_counter() - last_ts) < offline_threshold_sec()
 
 # Active training job — persists across page navigations
 training_worker: Optional["TrainingWorker"] = None

@@ -158,7 +158,7 @@ def main() -> None:
         weights_dst.mkdir(parents=True, exist_ok=True)
         print("  ⚠  weights/ not found — copy your .onnx model there before shipping")
 
-    for fname in ("readme.md",):
+    for fname in ("readme.md", ".env.example"):
         src = ROOT / fname
         if src.exists():
             shutil.copy2(src, DIST_DIR / fname)

@@ -89,23 +89,6 @@ def remove_computer_from_group(computer_id: int, group_id: int) -> None:
     c.commit()
 
 
-def assign_computer_to_group(computer_id: int, group_id: Optional[int]) -> None:
-    """
-    Backward-compatible shim.
-    group_id=<int>  → add_computer_to_group
-    group_id=None   → remove_computer_from_group for all groups (legacy behaviour)
-    Prefer add_computer_to_group / remove_computer_from_group directly.
-    """
-    if group_id is None:
-        c = _conn()
-        c.execute(
-            "DELETE FROM computer_group_member WHERE computer_id = ?", (computer_id,)
-        )
-        c.commit()
-    else:
-        add_computer_to_group(computer_id, group_id)
-
-
 def list_computers_in_group(group_id: int) -> list[dict]:
     c = _conn()
     rows = c.execute("""

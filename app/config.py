@@ -1,49 +1,153 @@
 """
 app/config.py
 ─────────────
-Default settings and helpers for reading / writing settings
-via NiceGUI's persistent app.storage.general.
+Default settings, environment-driven secrets, and helpers for reading /
+writing user-facing settings via NiceGUI's persistent app.storage.general.
+
+Secret handling
+───────────────
+  STORAGE_SECRET — signs NiceGUI session cookies. Loaded from the .env file
+  (or process environment). If .env does not exist, one is auto-generated with
+  a random secret so the app starts without manual setup.
+
+Logon password
+──────────────
+  The Veyon "logon" auth-method password is stored in the OS credential vault
+  (Windows Credential Manager / macOS Keychain / Secret Service on Linux) via
+  the `keyring` package — never written to app.storage.general as plaintext.
+  get_settings() / save_settings() transparently route logon_password through
+  keyring so every caller sees a regular dict and doesn't need to know.
 """
 from __future__ import annotations
-from pathlib import Path
 
+import logging
+import os
+import secrets
+from pathlib import Path
+from typing import Optional
+
+import sys
+
+import keyring
+from dotenv import load_dotenv
 from nicegui import app
 
-STORAGE_SECRET = "change-me-to-any-random-string"   # override via .env / env var
+log = logging.getLogger(__name__)
+
+# When frozen by PyInstaller, __file__ is inside the temp _MEI* extraction dir.
+# sys.executable always points to the actual .exe / script, so its parent is
+# where the user placed the program — which is where .env should live.
+if getattr(sys, "frozen", False):
+    _ENV_PATH = Path(sys.executable).parent / ".env"
+else:
+    _ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+
+# Auto-create .env with a random secret if it doesn't exist yet.
+if not _ENV_PATH.exists():
+    _generated_secret = secrets.token_urlsafe(48)
+    _ENV_PATH.write_text(
+        "# Auto-generated on first run. Edit as needed.\n"
+        f"STORAGE_SECRET={_generated_secret}\n"
+        "INITIAL_ADMIN_USERNAME=admin\n"
+        "INITIAL_ADMIN_PASSWORD=admin\n",
+        encoding="utf-8",
+    )
+    log.warning(
+        ".env not found — created automatically at %s with a random "
+        "STORAGE_SECRET and default admin/admin credentials. "
+        "Change the admin password after first login.",
+        _ENV_PATH,
+    )
+
+load_dotenv(_ENV_PATH)
+
+# ── Session cookie signing key ────────────────────────────────────────────────
+_PLACEHOLDER_SECRET = "replace-with-output-of-secrets.token_urlsafe(48)"
+STORAGE_SECRET: str = os.environ.get("STORAGE_SECRET", "").strip()
+
+if not STORAGE_SECRET or STORAGE_SECRET == _PLACEHOLDER_SECRET:
+    raise RuntimeError(
+        "STORAGE_SECRET is not set or is still the placeholder value. "
+        "Edit .env at the repo root and set STORAGE_SECRET to a random string. "
+        "Generate one with:\n"
+        '    python -c "import secrets; print(secrets.token_urlsafe(48))"'
+    )
+
+# ── Initial admin (used by main.py on first run only) ─────────────────────────
+INITIAL_ADMIN_USERNAME: str           = os.environ.get("INITIAL_ADMIN_USERNAME", "admin").strip()
+INITIAL_ADMIN_PASSWORD: Optional[str] = os.environ.get("INITIAL_ADMIN_PASSWORD")
+if INITIAL_ADMIN_PASSWORD is not None:
+    INITIAL_ADMIN_PASSWORD = INITIAL_ADMIN_PASSWORD.strip() or None
+
+
+# ── Keyring (Veyon logon password) ────────────────────────────────────────────
+_KEYRING_SERVICE   = "veyon-ai-monitor"
+_KEYRING_LOGON_KEY = "veyon_logon_password"
+
+
+def _keyring_get_logon_password() -> str:
+    try:
+        return keyring.get_password(_KEYRING_SERVICE, _KEYRING_LOGON_KEY) or ""
+    except Exception as exc:
+        log.warning("keyring read failed (%s); falling back to empty password", exc)
+        return ""
+
+
+def _keyring_set_logon_password(value: str) -> None:
+    try:
+        if value:
+            keyring.set_password(_KEYRING_SERVICE, _KEYRING_LOGON_KEY, value)
+        else:
+            try:
+                keyring.delete_password(_KEYRING_SERVICE, _KEYRING_LOGON_KEY)
+            except keyring.errors.PasswordDeleteError:
+                pass  # already absent — fine
+    except Exception as exc:
+        log.error("keyring write failed: %s", exc)
+
+
+# ── User-facing defaults (everything below is shown in /settings) ─────────────
+# Each key can be overridden via a VEYON_* env var in .env.
+# UI changes saved through /settings take precedence over these defaults.
+
+def _env_bool(key: str, default: bool) -> bool:
+    val = os.environ.get(key)
+    if val is None:
+        return default
+    return val.strip().lower() in ("1", "true", "yes")
+
 
 DEFAULTS: dict = {
     # ── Authentication ─────────────────────────────────────────────────────────
-    "auth_method":      "key",       # "key" | "logon"
-    # Key-based auth
-    "key_name":         "class",
-    "key_path":         "class.pem",
-    # Logon auth
-    "logon_username":   "",
-    "logon_password":   "",
+    "auth_method":         os.environ.get("VEYON_AUTH_METHOD",         "key"),
+    "key_name":            os.environ.get("VEYON_KEY_NAME",            "class"),
+    "key_path":            os.environ.get("VEYON_KEY_PATH",            "class.pem"),
+    "logon_username":      os.environ.get("VEYON_LOGON_USERNAME",      ""),
     # ── Veyon CLI ──────────────────────────────────────────────────────────────
-    "veyon_cli":        r"C:\Program Files\Veyon\veyon-cli.exe",
+    "veyon_cli":           os.environ.get("VEYON_CLI",                 r"C:\Program Files\Veyon\veyon-cli.exe"),
     # ── WebAPI Server ──────────────────────────────────────────────────────────
-    "host":             "localhost",
-    "port":             "11080",
-    "auto_start":       True,
-    "start_wait":       "10",
+    "host":                os.environ.get("VEYON_HOST",                "localhost"),
+    "port":                os.environ.get("VEYON_PORT",                "11080"),
+    "auto_start":          _env_bool("VEYON_AUTO_START",               True),
+    "start_wait":          os.environ.get("VEYON_START_WAIT",          "10"),
     # ── Capture ────────────────────────────────────────────────────────────────
-    "interval":         "1",
-    "img_fmt":          "jpeg",
-    "img_quality":      "85",
-    "img_width":        "480",
+    "interval":            os.environ.get("VEYON_INTERVAL",            "1"),
+    "img_fmt":             os.environ.get("VEYON_IMG_FMT",             "jpeg"),
+    "img_quality":         os.environ.get("VEYON_IMG_QUALITY",         "85"),
+    "img_width":           os.environ.get("VEYON_IMG_WIDTH",           "1920"),
     # ── Detection ──────────────────────────────────────────────────────────────
-    "model_path":       "weights/ONNX_FP32.onnx",
-    "detect_conf":      "0.40",
-    "detect_iou":       "0.20",
-    "detect_imgsz":     "480",
-    "keep_top1":        True,
+    # model_path and detect_imgsz are managed by the Models page, not /settings.
+    "model_path":          "weights/ONNX_FP32.onnx",
+    "detect_conf":         os.environ.get("VEYON_DETECT_CONF",         "0.40"),
+    "detect_iou":          os.environ.get("VEYON_DETECT_IOU",          "0.20"),
+    "detect_imgsz":        "480",
+    "keep_top1":           _env_bool("VEYON_KEEP_TOP1",                True),
     # ── Detection performance ───────────────────────────────────────────────────
-    "batch_max_cuda":        "32",   # max frames per inference call on GPU
-    "batch_max_cpu":         "16",   # max frames per inference call on CPU
-    "detect_cycle_timing":   False,  # log full capture→detection latency
+    "batch_max_cuda":      os.environ.get("VEYON_BATCH_MAX_CUDA",      "32"),
+    "batch_max_cpu":       os.environ.get("VEYON_BATCH_MAX_CPU",       "16"),
+    "detect_cycle_timing": _env_bool("VEYON_DETECT_CYCLE_TIMING",      False),
     # ── Alert behaviour ────────────────────────────────────────────────────────
-    "alert_threshold":  "1",
+    "alert_threshold":     os.environ.get("VEYON_ALERT_THRESHOLD",     "1"),
 }
 
 
@@ -53,6 +157,10 @@ def apply_active_model(model_id: int) -> None:
     Syncs detection_class table and updates all model-dependent settings
     (model_path, detect_imgsz) so the next monitoring start picks them up
     automatically — no manual Settings edits needed.
+
+    Skips the model_path update (and warns) if the file referenced in the
+    DB row no longer exists on disk; otherwise monitoring would start with
+    a stale path and fail at YOLO load time with a confusing error.
     """
     from app.db.database import get_model_by_id, sync_classes_from_model
     m = get_model_by_id(model_id)
@@ -61,19 +169,38 @@ def apply_active_model(model_id: int) -> None:
     sync_classes_from_model(model_id)
     s = get_settings()
     path = m.get("onnx_path") or m.get("pt_path")
-    if path:
+    if path and Path(path).exists():
         s["model_path"] = path
+    elif path:
+        log.warning(
+            "apply_active_model: model file %r referenced in DB row %s does "
+            "not exist on disk — keeping previous model_path", path, model_id,
+        )
     if m.get("imgsz"):
         s["detect_imgsz"] = str(m["imgsz"])
     save_settings(s)
 
 
 def get_settings() -> dict:
-    """Return stored settings merged on top of defaults."""
-    return {**DEFAULTS, **app.storage.general.get("settings", {})}
+    """
+    Return stored settings merged on top of defaults.
+    `logon_password` is transparently pulled from the OS keyring so callers
+    receive a plain dict and don't have to know where the secret lives.
+    """
+    merged = {**DEFAULTS, **app.storage.general.get("settings", {})}
+    merged["logon_password"] = _keyring_get_logon_password()
+    return merged
 
 
 def save_settings(vals: dict) -> None:
+    """
+    Persist settings, splitting the logon_password out into the OS keyring
+    so it is never written to app.storage.general (a plaintext JSON on disk).
+    """
+    vals = dict(vals)  # don't mutate caller's dict
+    logon_pw = vals.pop("logon_password", None)
+    if logon_pw is not None:
+        _keyring_set_logon_password(logon_pw)
     app.storage.general["settings"] = vals
 
 

@@ -82,6 +82,14 @@ def page_dashboard() -> None:
                     ann_switch = ui.switch(t("dash_annotations"), value=True).props("dense")
                     ann_switch.tooltip(t("dash_ann_tooltip"))
 
+                # OFFLINE badge — shown when the selected computer has stopped
+                # delivering frames. Hidden by default; tick() toggles visibility.
+                offline_badge = ui.label(t("dash_offline_badge")).classes(
+                    "text-xs font-bold text-white bg-red-600 "
+                    "px-2 py-1 rounded mb-1 self-start"
+                )
+                offline_badge.set_visibility(False)
+
                 live_img = ui.image("").props("no-spinner").classes(
                     "w-full rounded"
                 ).style("display:block;")
@@ -129,61 +137,66 @@ def page_dashboard() -> None:
     # ── Button handlers ───────────────────────────────────────────────────────
 
     def do_start() -> None:
-        if state.monitor:
-            return
-        if not get_active_model():
-            ui.notify(t("dash_no_active_model"), type="warning")
-            return
-        try:
-            cfg = collect_cfg()
-        except (ValueError, KeyError) as e:
-            ui.notify(t("dash_cfg_error").format(e=e), type="negative"); return
-
-        # Resolve computers for the selected group (0 = all)
-        gid   = group_sel.value   # 0 = all computers, >0 = group id
-        gname = group_opts.get(gid, "") if gid else ""
-
-        computers: list[dict] | None = None
-        if gid:
-            rows = list_computers_in_group(gid)
-            if not rows:
-                ui.notify(
-                    t("dash_no_computers").format(gname=gname), type="warning"
-                )
+        # Check-then-assign on state.monitor must be atomic across the UI
+        # thread and the scheduler thread; otherwise both could create their
+        # own MonitorController and leak one of them.
+        with state.monitor_lock:
+            if state.monitor:
                 return
-            computers = [{"name": r["name"], "host": r["host_address"]} for r in rows]
+            if not get_active_model():
+                ui.notify(t("dash_no_active_model"), type="warning")
+                return
+            try:
+                cfg = collect_cfg()
+            except (ValueError, KeyError) as e:
+                ui.notify(t("dash_cfg_error").format(e=e), type="negative"); return
 
-        reset_model()
-        state.monitor = MonitorController(cfg, computers=computers)
-        state.monitor.start()
-        state.monitored_group_name = gname if gid else ""
-        _mon_names[0] = {c["name"] for c in computers} if computers else set()
-        log_action("monitor.start", user_id=current["id"],
-                   detail=f"group={gname or 'all'}")
-        btn_start.props("disable")
-        btn_stop.props(remove="disable")
-        group_sel.props("disable")
-        label = (
-            t("status_running_group").format(g=gname)
-            if gid else t("status_running_all")
-        )
-        status_lbl.set_text(label)
-        status_lbl.classes(
-            replace="font-mono text-sm text-green-500 dark:text-green-400")
+            # Resolve computers for the selected group (0 = all)
+            gid   = group_sel.value   # 0 = all computers, >0 = group id
+            gname = group_opts.get(gid, "") if gid else ""
+
+            computers: list[dict] | None = None
+            if gid:
+                rows = list_computers_in_group(gid)
+                if not rows:
+                    ui.notify(
+                        t("dash_no_computers").format(gname=gname), type="warning"
+                    )
+                    return
+                computers = [{"name": r["name"], "host": r["host_address"]} for r in rows]
+
+            reset_model()
+            state.monitor = MonitorController(cfg, computers=computers)
+            state.monitor.start()
+            state.monitored_group_name = gname if gid else ""
+            _mon_names[0] = {c["name"] for c in computers} if computers else set()
+            log_action("monitor.start", user_id=current["id"],
+                       detail=f"group={gname or 'all'}")
+            btn_start.props("disable")
+            btn_stop.props(remove="disable")
+            group_sel.props("disable")
+            label = (
+                t("status_running_group").format(g=gname)
+                if gid else t("status_running_all")
+            )
+            status_lbl.set_text(label)
+            status_lbl.classes(
+                replace="font-mono text-sm text-green-500 dark:text-green-400")
 
     def do_stop() -> None:
-        if state.monitor:
-            state.monitor.stop()
-            state.monitor = None
-        state.consecutive_detections.clear()
-        state.schedule_triggered    = False   # manual stop overrides scheduler
-        state.monitored_group_name  = None
-        _mon_names[0] = set()
-        log_action("monitor.stop", user_id=current["id"], detail="manual")
-        btn_start.props(remove="disable")
-        btn_stop.props("disable")
-        group_sel.props(remove="disable")
-        status_lbl.set_text(t("status_stopped"))
+        with state.monitor_lock:
+            if state.monitor:
+                state.monitor.stop()
+                state.monitor = None
+            state.consecutive_detections.clear()
+            state.schedule_triggered    = False   # manual stop overrides scheduler
+            state.monitored_group_name  = None
+            _mon_names[0] = set()
+            log_action("monitor.stop", user_id=current["id"], detail="manual")
+            btn_start.props(remove="disable")
+            btn_stop.props("disable")
+            group_sel.props(remove="disable")
+            status_lbl.set_text(t("status_stopped"))
         status_lbl.classes(
             replace="font-mono text-sm text-red-500 dark:text-red-400")
 
@@ -242,11 +255,21 @@ def page_dashboard() -> None:
         all_opts = list(state.latest_frames.keys())
         filter_names = _mon_names[0]
         opts = [n for n in all_opts if n in filter_names] if filter_names else all_opts
-        if sorted(opts) != sorted(list(pc_sel.options or [])):
-            pc_sel.options = opts
+
+        # Build a {value: label} mapping so offline machines visibly carry the
+        # "(offline)" suffix without changing the option value (which is the
+        # raw computer name). NiceGUI's ui.select supports both list and dict
+        # forms for `options`.
+        offline_suffix = t("dash_offline_suffix")
+        opts_map = {
+            n: (f"{n}  {offline_suffix}" if not state.is_computer_online(n) else n)
+            for n in opts
+        }
+        if opts_map != (pc_sel.options or {}):
+            pc_sel.options = opts_map
             pc_sel.update()
-            if pc_sel.value not in opts:
-                pc_sel.set_value(opts[0] if opts else None)
+            if pc_sel.value not in opts_map:
+                pc_sel.set_value(next(iter(opts_map), None))
 
         sel = pc_sel.value
         if sel and sel in state.latest_frames:
@@ -257,6 +280,9 @@ def page_dashboard() -> None:
             if src != _last_src[0]:
                 _last_src[0] = src
                 live_img.set_source(src)
+
+            # Toggle the OFFLINE badge for the currently selected computer.
+            offline_badge.set_visibility(not state.is_computer_online(sel))
 
             uid = state.computer_users.get(sel)
             if uid:
@@ -271,5 +297,8 @@ def page_dashboard() -> None:
                     f"{d['class_name']} {d['conf']:.0%}" for d in dets)
                 if dets else t("dash_no_detections")
             )
+        else:
+            # No selection / no frames yet — hide the badge.
+            offline_badge.set_visibility(False)
 
     ui.timer(0.1, tick)

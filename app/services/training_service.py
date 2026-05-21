@@ -554,10 +554,22 @@ def analyze_dataset(dataset_dir: str) -> dict:
 
 def prepare_splits(analysis: dict) -> str:
     needs = analysis.get("needs_split", [])
-    if not needs:
-        return analysis["yaml_path"]
+    # Always resolve to an absolute path so Ultralytics finds images regardless
+    # of the process CWD (e.g. dist\ when running as a frozen EXE).
+    base  = Path(analysis["dataset_dir"]).resolve()
 
-    base   = Path(analysis["dataset_dir"])
+    if not needs:
+        # Patch the yaml in-place if 'path' is missing or relative.
+        yaml_path = Path(analysis["yaml_path"])
+        with open(yaml_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+        existing = str(data.get("path", ""))
+        if not existing or not Path(existing).is_absolute():
+            data["path"] = str(base)
+            with open(yaml_path, "w", encoding="utf-8") as f:
+                yaml.dump(data, f, allow_unicode=True)
+        return str(yaml_path)
+
     tr_img = Path(analysis["splits"]["train"]["img_dir"])
     exts   = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
     all_img = sorted(f for f in tr_img.rglob("*") if f.suffix.lower() in exts)
@@ -975,7 +987,20 @@ class TrainingWorker:
                 return
 
             self._push_status("Exporting to ONNX …")
-            onnx_path = model.export(format="onnx", imgsz=cfg["imgsz"])
+            # dynamic=True → batch / spatial dimensions become symbolic, so a
+            # single ONNX file works for batch=1 inference *and* batched runs
+            # (e.g. batch=16 in the detect worker when many computers are
+            # tracked). Without this flag ultralytics bakes batch=1 into the
+            # graph and ONNX Runtime refuses any other batch size.
+            # simplify=True folds constants for a slightly smaller / faster
+            # graph; opset=17 matches the manual export notebook.
+            onnx_path = model.export(
+                format   = "onnx",
+                imgsz    = cfg["imgsz"],
+                dynamic  = True,
+                simplify = True,
+                opset    = 17,
+            )
 
             rd    = results.results_dict
             m50   = float(rd.get("metrics/mAP50(B)",      0))

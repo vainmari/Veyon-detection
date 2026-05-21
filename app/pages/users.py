@@ -86,6 +86,14 @@ def page_users() -> None:
                         form_msg.classes(replace="text-sm text-red-500")
                         return
 
+                    # Enforce the same minimum password length as the
+                    # activation flow (users.py:do_activate) — otherwise an
+                    # admin could create accounts with passwords like "a".
+                    if len(pwd) < 6:
+                        form_msg.set_text(t("pwd_err_short"))
+                        form_msg.classes(replace="text-sm text-red-500")
+                        return
+
                     create_btn.props("loading")
                     form_msg.set_text(t("users_creating"))
                     form_msg.classes(replace="text-sm text-gray-500 dark:text-gray-400")

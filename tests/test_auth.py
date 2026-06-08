@@ -20,7 +20,7 @@ def _make_storage(initial: dict | None = None):
 
 def _import_auth(storage: dict):
     """Re-import auth with a fresh NiceGUI mock each time."""
-    import importlib, sys
+    import sys
     mock_app = MagicMock()
     mock_app.storage.user = storage
     mock_ui  = MagicMock()

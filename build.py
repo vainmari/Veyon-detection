@@ -170,11 +170,11 @@ def main() -> None:
     print("  ✓ data/")
 
     # ── 5. Summary ────────────────────────────────────────────────────────────
-    print(f"\n✅  Build complete.")
+    print("\n✅  Build complete.")
     print(f"   Exe    : {EXE}")
     print(f"   Size   : {EXE.stat().st_size / 1e6:.0f} MB")
-    print(f"\n   Ship the dist\\ folder (exe + weights\\ + data\\).")
-    print(f"   Users double-click  VeyonAIMonitor.exe  — no install needed.")
+    print("\n   Ship the dist\\ folder (exe + weights\\ + data\\).")
+    print("   Users double-click  VeyonAIMonitor.exe  — no install needed.")
 
 
 def _size(path: Path) -> str:

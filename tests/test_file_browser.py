@@ -10,7 +10,6 @@ Run:  pytest tests/test_file_browser.py -v
 from __future__ import annotations
 from pathlib import Path
 
-import pytest
 
 from app.pages._file_browser import _list_entries
 

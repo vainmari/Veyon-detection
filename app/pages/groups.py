@@ -98,7 +98,7 @@ def page_groups() -> None:
         with ui.dialog() as assign_dlg, \
              ui.card().classes("p-5 gap-3").style("min-width:480px; max-width:95vw;"):
             assign_title  = ui.label("").classes("text-lg font-bold mb-1")
-            assign_hint   = ui.label(t("groups_assign_hint")).classes(
+            ui.label(t("groups_assign_hint")).classes(
                 "text-xs text-gray-500 dark:text-gray-400 -mt-1")
             assign_gid    = [None]
             assign_checks: dict[int, ui.checkbox] = {}

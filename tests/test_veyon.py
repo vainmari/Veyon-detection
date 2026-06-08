@@ -7,8 +7,7 @@ Run:  pytest tests/test_veyon.py -v
 """
 from __future__ import annotations
 import json
-import socket
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import cv2
 import numpy as np

@@ -5,13 +5,15 @@ Session helpers using NiceGUI's per-browser app.storage.user.
 
 Role definitions
 ────────────────
-  admin   — user management (/users) + model management (/models)
-  teacher — monitoring pages: dashboard, history, analytics, alerts, settings
-            + student management (create/delete students in /users)
-  student — own history + analytics only
+  admin   — /users, /models, /audit, /settings
+  teacher — /  (dashboard), /history, /analytics, /alerts, /groups,
+            /schedules, /users, /models, /audit
+            + Start/Stop monitor and the notification bell
+  student — own /history + /analytics only
 
-Roles are DISTINCT — admin does NOT get teacher pages and vice-versa.
-The only shared page is /users (both admin and teacher, with different capabilities).
+Roles are DISTINCT — admin does NOT get teacher-only pages (dashboard,
+schedules, …) and teacher does NOT get /settings. The shared pages are
+/users, /models, and /audit (admin and teacher, with different capabilities).
 """
 from __future__ import annotations
 from typing import Optional

@@ -155,7 +155,7 @@ class TestUsers:
 
     def test_duplicate_raises(self, db):
         db.create_user("alice", "pw", "student")
-        with pytest.raises(Exception):
+        with pytest.raises(sqlite3.IntegrityError):
             db.create_user("alice", "pw2", "student")
 
     def test_verify_correct(self, db):

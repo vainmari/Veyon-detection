@@ -7,6 +7,11 @@
 *.jpeg
 *.png
 
+# Keep README screenshots / docs assets
+!assets/*.png
+!assets/*.jpg
+!assets/*.jpeg
+
 # DB
 *.db
 
@@ -33,3 +38,9 @@ runs/
 # Weight files
 *.pt
 *.onnx
+
+# Training datasets and archives
+datasets
+
+# Latency / profiling logs
+latency_log.csv

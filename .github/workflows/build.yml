@@ -9,6 +9,20 @@ on:
 
 jobs:
 
+  # ── Lint (ruff) ─────────────────────────────────────────────────────────────
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install ruff
+        run: pip install ruff
+      - name: Run ruff
+        run: ruff check .
+
   # ── Unit tests (fast, mocked) ───────────────────────────────────────────────
   test-unit:
     name: Unit tests
@@ -68,6 +82,8 @@ jobs:
     name: Build Windows executable
     needs: [test-unit, test-db]
     runs-on: windows-latest
+    permissions:
+      contents: write   # required for softprops/action-gh-release to create the Release
     steps:
       - uses: actions/checkout@v4
 

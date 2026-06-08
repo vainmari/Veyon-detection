@@ -1,6 +1,80 @@
 # Veyon AI Monitor
 
-A real-time classroom monitoring system that captures student screens via the Veyon WebAPI, runs YOLO object detection to identify AI tool usage, and presents results in a browser-based dashboard — with no JavaScript required.
+[![CI](https://github.com/vainmari/Veyon-detection/actions/workflows/build.yml/badge.svg)](https://github.com/vainmari/Veyon-detection/actions/workflows/build.yml)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)
+
+A real-time screen-content monitoring platform: it captures screens from networked machines via the Veyon WebAPI, runs YOLO object detection to flag on-screen activity of interest, and presents the results in a browser dashboard whose entire UI is defined in Python (NiceGUI) — no separate JavaScript frontend to write.
+
+The reference configuration targets **academic integrity** — detecting unauthorized AI-tool usage during exams — but the underlying engine (privacy-preserving, local screen-content analysis) is general-purpose. Swapping the detection model and the class set adapts it to any "what is on these screens, right now and over time?" problem.
+
+<p align="center">
+  <img src="assets/dashboard.png" alt="Veyon AI Monitor — live dashboard" width="820">
+</p>
+
+---
+
+## Contents
+
+- [Features](#features)
+- [Screenshots](#screenshots)
+- [Use Cases](#use-cases)
+- [Quick Start](#quick-start)
+- [Installation](#installation)
+- [Environment & Secrets](#environment--secrets)
+- [Project Structure](#project-structure)
+- [Architecture](#architecture)
+- [Database Schema](#database-schema)
+- [User Roles](#user-roles)
+- [Configuration](#configuration)
+- [Building the EXE](#building-the-exe)
+- [Running Tests](#running-tests)
+- [CI](#ci)
+- [System Requirements](#system-requirements)
+- [License](#license)
+
+---
+
+## Features
+
+- **🔒 100% local & private** — screens are processed on your own network and stored in a local SQLite database; nothing is sent to the cloud.
+- **⚡ Real-time on CPU** — NMS-free YOLO26n inference at ~15 ms/frame on a CPU; full class-detection cycle in 3–4 seconds. No GPU required (CUDA used automatically if present).
+- **🎯 High accuracy** — 0.984 mAP50-95 on the reference dataset.
+- **🧩 Veyon-native** — captures through the existing Veyon WebAPI; no extra agent to install on monitored machines.
+- **🤖 Train your own models in-app** — upload a dataset and train or fine-tune new detection classes from the UI (no ML expertise needed); exports to ONNX automatically.
+- **👥 Role-based access** — admin / teacher / student roles with distinct capabilities (RBAC).
+- **🌐 Bilingual UI** — English and Lithuanian.
+- **🐍 Pure-Python UI** — built with NiceGUI; no separate JavaScript frontend to maintain.
+- **🖥 Cross-platform** — runs from source on Windows, Linux, and macOS (Veyon supports Windows & Linux).
+- **✅ Well-tested** — 100+ unit tests with all network / subprocess / UI calls mocked, plus CI.
+
+---
+
+## Screenshots
+
+<table>
+  <tr>
+    <td align="center" width="50%"><img src="assets/analytics.png" alt="Analytics" width="400"><br><sub><b>Analytics</b></sub></td>
+    <td align="center" width="50%"><img src="assets/models.png" alt="In-app model training" width="400"><br><sub><b>In-app model training</b></sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="50%"><img src="assets/alerts.png" alt="Alert rules" width="400"><br><sub><b>Alert rules</b></sub></td>
+    <td align="center" width="50%"><img src="assets/login.png" alt="Login" width="400"><br><sub><b>Login</b></sub></td>
+  </tr>
+</table>
+
+---
+
+## Use Cases
+
+- **Academic integrity** — flag unauthorized AI assistants or prohibited applications during exams and lab sessions (the bundled reference setup).
+- **Workforce productivity** — measure time spent in work applications vs. off-task activity, with per-machine and historical breakdowns.
+- **Software-usage auditing & license optimization** — see which applications are actually used, and how often, to right-size license spend.
+- **UX & behavioural research** — observe real on-screen interaction patterns across a fleet of machines.
+- **Corporate compliance & security monitoring** — detect prohibited tools or data-handling patterns on managed endpoints.
+
+All analysis runs locally against your own Veyon-managed machines — no screen content leaves your network.
 
 ---
 
@@ -34,6 +108,55 @@ All runtime settings (auth keys, Veyon CLI path, detection thresholds, etc.) are
 
 ---
 
+## Installation
+
+> **Prerequisite:** this tool does not capture screens itself — it reads them through the [Veyon](https://veyon.io) WebAPI. You must configure Veyon first (below), then install the monitor via **Option A** (prebuilt `.exe`) or **Option B** (from source).
+
+### 1. Configure Veyon (required, on every machine)
+
+Veyon must be installed on the teacher/observer station **and** every monitored computer.
+
+1. **Install Veyon** from <https://veyon.io/en/download/> on each machine. Keep the defaults, except on the **Components** screen: a computer that is only *monitored* (never used to observe) can uncheck **Veyon Master**; the teacher/observer machine must keep it. Click **Install**.
+2. **Set the authentication method.** Open **Veyon Configurator → General** and choose **key-based (cryptographic key) authentication** on every machine. (Logon auth also works, but this guide uses keys.)
+3. **Create the key pair** on the admin machine: **Authentication keys → Create key pair**, give it a name. Veyon generates a public/private pair. **Export both** keys (Export key) and store them safely:
+   - the **public** key is imported on every monitored computer;
+   - the **private** key is what this app authenticates with — point `key_path` at it (default `class.pem`).
+4. **Import the public key** on each monitored computer (**Authentication keys → Import key**).
+5. **Register the machines:** on the observer and monitored computers, under **Locations & computers**, add the same location and list each computer's name and IP address.
+6. **Enable the WebAPI:** in Veyon Configurator switch **View → Advanced**, open the **Web API** section, and ensure the WebAPI server is **enabled**.
+
+> Make sure the **port** set in this app's Settings matches Veyon's WebAPI port, and that the app can read the exported **private key**.
+
+### 2a. Option A — Prebuilt executable (recommended for everyday use)
+
+No Python needed.
+
+1. Download the latest release archive (`.zip`) from the [Releases page](https://github.com/vainmari/Veyon-detection/releases).
+2. Extract it anywhere, **keeping the folder structure intact** — the `.exe` needs `weights/` and `data/` alongside it.
+3. Double-click the executable. If Windows SmartScreen appears, click **More info → Run anyway**.
+4. After a few seconds the GUI opens in your browser. The system is ready.
+
+### 2b. Option B — From source (for development or customization)
+
+Full freedom to modify, extend, and rebuild the system.
+
+```bash
+git clone https://github.com/vainmari/Veyon-detection.git
+cd Veyon-detection
+
+python -m venv .venv
+.venv\Scripts\activate            # Windows
+# source .venv/bin/activate       # Linux / macOS
+
+pip install -e ".[dev]"           # use ".[dev,build]" if you also want to build the .exe
+
+python run.py                     # GUI opens at http://localhost:8080
+```
+
+Then complete first-run configuration (secrets, model, admin login) as described in [Quick Start](#quick-start) above.
+
+---
+
 ## Environment & Secrets
 
 Copy `.env.example` to `.env` at the repo root (or next to the EXE in `dist/`) and edit as needed. The file is `.gitignored` — never commit it.
@@ -52,6 +175,9 @@ All `VEYON_*` variables in `.env.example` are optional — they override the bui
 
 ## Project Structure
 
+<details>
+<summary><b>Click to expand the full source tree</b></summary>
+
 ```
 repo/
 │
@@ -59,7 +185,6 @@ repo/
 ├── build.py                        PyInstaller build script (produces .exe)
 ├── pyproject.toml                  Project metadata and dependencies
 ├── .env.example                    Template for required secrets and optional overrides
-├── conftest.py                     Adds repo root to sys.path for pytest
 │
 ├── weights/                        YOLO model files (.onnx / .pt)
 │   └── yolo26n.onnx
@@ -81,6 +206,7 @@ repo/
 │   │
 │   ├── core/                       Pure utilities — no UI, no business logic
 │   │   ├── auth.py                 Session helpers (get/set/clear, require_auth)
+│   │   ├── colors.py               Shared 32-color palette (boxes, badges, charts)
 │   │   ├── imaging.py              postprocess(), img_to_b64()
 │   │   ├── veyon.py                Veyon WebAPI client (auth, framebuffer, user fetch)
 │   │   └── yolo.py                 YOLO model singleton (get_model, reset_model)
@@ -92,11 +218,16 @@ repo/
 │   │   ├── users.py                User CRUD and auto-assign logic
 │   │   ├── computers.py            Computer CRUD
 │   │   ├── groups.py               Group + membership CRUD
+│   │   ├── schedules.py            Schedule CRUD + per-schedule notify-class overrides
+│   │   ├── detection.py            Detection-class lookups, event insertion, frame retrieval
+│   │   ├── analytics.py            Read-only analytics queries (/analytics, /history)
+│   │   ├── ml_models.py            ML model registry + sync_classes_from_model()
 │   │   ├── alerts.py               Notification read/create/query
 │   │   └── audit.py                Immutable audit log writes and queries
 │   │
 │   ├── services/
 │   │   ├── monitor_service.py      MonitorController + drain_worker background thread
+│   │   ├── alert_service.py        Matches detections against rules, inserts notifications
 │   │   ├── schedule_service.py     Daemon that auto-starts/stops monitoring on schedule
 │   │   └── training_service.py     Dataset analysis, COCO→YOLO conversion, YOLO training, ONNX export
 │   │
@@ -127,6 +258,8 @@ repo/
     └── test_veyon.py               Veyon client (all network calls mocked)
 ```
 
+</details>
+
 ---
 
 ## Architecture
@@ -139,12 +272,12 @@ Veyon WebAPI
     │  (one thread per computer — pure I/O)
     ▼
 _raw_q  ──────────────────────────────────────────────────────────┐
-                                                                   │
+                                                                  │
                                         YOLO batch detect thread  │
                                           ├─ postprocess()        │
                                           ├─ insert_event() → DB  │
                                           └─ state.img_q ─────────┤
-                                                                   │
+                                                                  │
                               drain_worker thread (50 ms loop)    │
                                   ├─ state.log_buffer  ◄──────────┘
                                   └─ state.latest_frames
@@ -183,6 +316,8 @@ schedule                   ← monitoring schedules (time windows + group + mode
 schedule_notification_class← per-schedule notification class overrides (optional)
 detection_class            ← YOLO class registry, seeded from DEFAULT_CLASSES
 ml_model                   ← imported / trained YOLO model records
+model_class                ← maps each model's output class index → detection_class
+                              (lets two models map the same class at different indices)
 detection_event            ← one row per captured frame, always logged
                               • computer_id → computer
                               • user_id     → user (nullable — assigned later)
@@ -226,6 +361,9 @@ Student usernames **must match their Windows login name** (the part after the ba
 
 All settings are editable at runtime via the Settings page and persisted between restarts. Each key can also be pre-set via a `VEYON_*` env var in `.env` (see `.env.example`). The priority order is: **UI settings page > .env vars > built-in defaults**.
 
+<details>
+<summary><b>Full settings reference</b></summary>
+
 | Key | Default | Description |
 |---|---|---|
 | `auth_method` | `key` | `key` (certificate) or `logon` (username/password) |
@@ -250,6 +388,8 @@ All settings are editable at runtime via the Settings page and persisted between
 | `detect_cycle_timing` | `false` | Log full capture→detection latency to `latency_log.csv` |
 | `alert_threshold` | `1` | Minimum consecutive detections per class to trigger an alert |
 
+</details>
+
 `model_path` and `detect_imgsz` are managed by the Models page (set automatically when you activate a model) and are not shown in `/settings`.
 
 ---
@@ -257,7 +397,8 @@ All settings are editable at runtime via the Settings page and persisted between
 ## Building the EXE
 
 ```bash
-# Inside the venv, from the repo root:
+# Install the build extra (PyInstaller), then build — from the repo root, inside the venv:
+pip install -e ".[build]"
 python build.py
 ```
 
@@ -287,7 +428,7 @@ pytest tests/test_config.py::TestCollectCfgKeyData -v
 | `test_config.py` | Settings merging, `collect_cfg()` type casting, key file reading |
 | `test_imaging.py` | Bounding-box postprocessing, base64 encoding, image immutability |
 | `test_file_browser.py` | Directory listing, extension/mode filtering, permission errors |
-| `test_database.py` | Schema, migrations, all CRUD, query filters, auto-assign logic |
+| `test_database.py` | Schema, all CRUD, query filters, auto-assign logic |
 | `test_monitor.py` | Username parsing, drain worker, `MonitorController` lifecycle |
 | `test_veyon.py` | Port check, image decode, authenticate, framebuffer grab, user fetch, computer discovery |
 
@@ -301,7 +442,7 @@ Two test jobs run in parallel on every push; the build only runs after both pass
 
 ```
 test-unit ──┐
-             ├─► build (exe + release)
+            ├─► build (exe + release)
 test-db   ──┘
 ```
 
@@ -313,9 +454,19 @@ test-db   ──┘
 
 ## System Requirements
 
-- **OS:** Windows (required for Veyon). Python 3.10+.
+- **OS:** Cross-platform — the app runs anywhere with **Python 3.10+** (Windows, Linux, macOS). The [Veyon](https://veyon.io) infrastructure it connects to (monitored machines + WebAPI) supports **Windows and Linux**. The prebuilt `.exe` is Windows-only; on Linux/macOS run from source.
 - **CPU:** ≥ 6 cores, ≥ 3.5 GHz base clock.
 - **RAM:** ≥ 16 GB.
 - **Storage:** SSD recommended (SQLite BLOB writes).
 - **Network:** LAN ≥ 1 Gbps between monitor machine and student computers.
 - **GPU:** Optional — CUDA is used automatically if available, falls back to CPU (ONNX Runtime).
+
+> **Non-Windows note:** set `VEYON_CLI` (or the Settings field) to your platform's `veyon-cli` path — the default points at the Windows install location. This only affects auto-starting the WebAPI and importing computers from Veyon; core monitoring works over HTTP regardless. Key-based auth needs only the `.pem` file; `logon` auth additionally needs a working `keyring` backend (e.g. Secret Service on Linux).
+
+---
+
+## License
+
+Licensed under the **GNU Affero General Public License v3.0 or later** — see [LICENSE](LICENSE).
+
+This project depends on [Ultralytics YOLO](https://github.com/ultralytics/ultralytics), which is itself AGPL-3.0. If you run a modified version of this software as a network service, the AGPL requires you to make your source available to its users.

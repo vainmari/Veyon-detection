@@ -5,7 +5,28 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "veyon-ai-monitor"
 version = "0.1.0"
+description = "Real-time classroom monitoring that captures student screens via the Veyon WebAPI, runs YOLO detection to flag AI-tool usage, and serves results in a browser dashboard."
+readme = "readme.md"
 requires-python = ">=3.10"
+license = { text = "AGPL-3.0-or-later" }
+authors = [{ name = "Marius Vainauskis" }]
+keywords = [
+    "Software Recognition", "Deep Learning", "Veyon", "Artificial Intelligence",
+    "Detection", "Computer Monitoring", "Computer Vision",
+]
+classifiers = [
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+    "Programming Language :: Python :: 3",
+    "Operating System :: Microsoft :: Windows",
+    "Topic :: System :: Monitoring",
+    "Topic :: Multimedia :: Graphics :: Capture :: Screen Capture",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Security",
+    "Topic :: Education",
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: System Administrators",
+    "Intended Audience :: Education",
+]
 dependencies = [
     "nicegui>=1.4",
     "requests>=2.31",
@@ -21,13 +42,34 @@ dependencies = [
     "keyring>=24.0",
 ]
 
+[project.urls]
+Repository = "https://github.com/vainmari/Veyon-detection"
+
 [tool.setuptools.packages.find]
 include = ["app*"]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=9.0",
+    "ruff>=0.6",
 ]
 build = [
     "pyinstaller>=6.0",
 ]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+# Conservative, correctness-focused ruleset — catches real bugs without
+# fighting this codebase's deliberate style (Optional[...] hints, inline
+# semicolons, and lazy in-function imports are intentional and left alone).
+select = ["E9", "F", "B"]
+ignore = [
+    "B905",  # zip() without strict= — fine for the supported Python versions
+]
+
+[tool.ruff.lint.per-file-ignores]
+# `import app.main` is a side-effect import that registers all NiceGUI pages.
+"run.py" = ["F401"]

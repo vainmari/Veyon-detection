@@ -51,6 +51,7 @@ jobs:
           tests/test_imaging.py
           tests/test_file_browser.py
           tests/test_monitor.py
+          tests/test_rate_limit.py
           tests/test_veyon.py
           --tb=short -q
 

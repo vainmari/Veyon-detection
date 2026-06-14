@@ -6,8 +6,8 @@ Session helpers using NiceGUI's per-browser app.storage.user.
 Role definitions
 ────────────────
   admin   — /users, /models, /audit, /settings
-  teacher — /  (dashboard), /history, /analytics, /alerts, /groups,
-            /schedules, /users, /models, /audit
+  teacher — /  (dashboard), /history, /analytics, /reports, /alerts,
+            /groups, /schedules, /users, /models, /audit
             + Start/Stop monitor and the notification bell
   student — own /history + /analytics only
 

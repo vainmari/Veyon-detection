@@ -17,33 +17,40 @@ The reference configuration targets **academic integrity** — detecting unautho
 
 ## Contents
 
-- [Features](#features)
-- [Screenshots](#screenshots)
-- [Use Cases](#use-cases)
-- [Quick Start](#quick-start)
-- [Installation](#installation)
-- [Environment & Secrets](#environment--secrets)
-- [Project Structure](#project-structure)
-- [Architecture](#architecture)
-- [Database Schema](#database-schema)
-- [User Roles](#user-roles)
-- [Configuration](#configuration)
-- [Building the EXE](#building-the-exe)
-- [Running Tests](#running-tests)
-- [CI](#ci)
-- [System Requirements](#system-requirements)
-- [License](#license)
+- [Veyon AI Monitor](#veyon-ai-monitor)
+  - [Contents](#contents)
+  - [Features](#features)
+  - [Screenshots](#screenshots)
+  - [Use Cases](#use-cases)
+  - [Quick Start](#quick-start)
+  - [Installation](#installation)
+    - [1. Configure Veyon (required, on every machine)](#1-configure-veyon-required-on-every-machine)
+    - [2a. Option A — Prebuilt executable (recommended for everyday use)](#2a-option-a--prebuilt-executable-recommended-for-everyday-use)
+    - [2b. Option B — From source (for development or customization)](#2b-option-b--from-source-for-development-or-customization)
+  - [Environment \& Secrets](#environment--secrets)
+  - [Project Structure](#project-structure)
+  - [Architecture](#architecture)
+    - [Data flow](#data-flow)
+  - [Database Schema](#database-schema)
+  - [User Roles](#user-roles)
+  - [Configuration](#configuration)
+  - [Building the EXE](#building-the-exe)
+  - [Running Tests](#running-tests)
+  - [CI](#ci)
+  - [System Requirements](#system-requirements)
+  - [License](#license)
 
 ---
 
 ## Features
 
 - **🔒 100% local & private** — screens are processed on your own network and stored in a local SQLite database; nothing is sent to the cloud.
-- **⚡ Real-time on CPU** — NMS-free YOLO26n inference at ~15 ms/frame on a CPU; full class-detection cycle in 3–4 seconds. No GPU required (CUDA used automatically if present).
-- **🎯 High accuracy** — 0.984 mAP50-95 on the reference dataset.
+- **⚡ Real-time on CPU** — NMS-free YOLO26n inference at ~15 ms/frame on a CPU; full classroom detection cycle in 3–4 seconds. No GPU required (CUDA used automatically if present).
+- **🎯 High accuracy** — 0.984 mAP50-95 on the 7-class reference test set.
 - **🧩 Veyon-native** — captures through the existing Veyon WebAPI; no extra agent to install on monitored machines.
 - **🤖 Train your own models in-app** — upload a dataset and train or fine-tune new detection classes from the UI (no ML expertise needed); exports to ONNX automatically.
-- **👥 Role-based access** — admin / teacher / student roles with distinct capabilities (RBAC).
+- **👥 Role-based access** — admin / teacher / student roles with distinct capabilities (RBAC); login attempts are rate-limited per client IP.
+- **📊 Run reports** — every monitoring session (manual or scheduled) is recorded; the Reports page shows prohibited-class alerts (who, when, with per-alert screenshots) plus per-class / per-student / per-computer breakdowns, and exports to CSV or print-ready PDF.
 - **🌐 Bilingual UI** — English and Lithuanian.
 - **🐍 Pure-Python UI** — built with NiceGUI; no separate JavaScript frontend to maintain.
 - **🖥 Cross-platform** — runs from source on Windows, Linux, and macOS (Veyon supports Windows & Linux).
@@ -166,6 +173,10 @@ Copy `.env.example` to `.env` at the repo root (or next to the EXE in `dist/`) a
 | `STORAGE_SECRET` | **Yes** | Signs NiceGUI session cookies. Auto-generated if `.env` is absent. Rotate with `python -c "import secrets; print(secrets.token_urlsafe(48))"` |
 | `INITIAL_ADMIN_USERNAME` | First run | Username of the bootstrap admin account (default: `admin`) |
 | `INITIAL_ADMIN_PASSWORD` | First run | Password of the bootstrap admin account. The app **exits** on a fresh DB if this is unset. |
+| `BIND_HOST` | No | Interface the web UI listens on. Default `0.0.0.0` (reachable from the LAN). Set `127.0.0.1` to restrict to the local machine, e.g. behind a TLS reverse proxy. |
+| `BIND_PORT` | No | Web UI port (default `8080`). |
+| `LOGIN_MAX_ATTEMPTS` | No | Failed logins allowed per client IP inside the window before lockout (default `5`). |
+| `LOGIN_WINDOW_SEC` | No | Sliding-window length in seconds for login rate limiting (default `300`). |
 
 All `VEYON_*` variables in `.env.example` are optional — they override the built-in defaults listed in the Configuration section below. Settings saved through `/settings` take highest precedence.
 
@@ -206,6 +217,7 @@ repo/
 │   │
 │   ├── core/                       Pure utilities — no UI, no business logic
 │   │   ├── auth.py                 Session helpers (get/set/clear, require_auth)
+│   │   ├── rate_limit.py           Sliding-window login rate limiter (per client IP)
 │   │   ├── colors.py               Shared 32-color palette (boxes, badges, charts)
 │   │   ├── imaging.py              postprocess(), img_to_b64()
 │   │   ├── veyon.py                Veyon WebAPI client (auth, framebuffer, user fetch)
@@ -221,6 +233,7 @@ repo/
 │   │   ├── schedules.py            Schedule CRUD + per-schedule notify-class overrides
 │   │   ├── detection.py            Detection-class lookups, event insertion, frame retrieval
 │   │   ├── analytics.py            Read-only analytics queries (/analytics, /history)
+│   │   ├── runs.py                 Monitoring-run lifecycle + per-run report queries
 │   │   ├── ml_models.py            ML model registry + sync_classes_from_model()
 │   │   ├── alerts.py               Notification read/create/query
 │   │   └── audit.py                Immutable audit log writes and queries
@@ -229,6 +242,7 @@ repo/
 │   │   ├── monitor_service.py      MonitorController + drain_worker background thread
 │   │   ├── alert_service.py        Matches detections against rules, inserts notifications
 │   │   ├── schedule_service.py     Daemon that auto-starts/stops monitoring on schedule
+│   │   ├── report_export.py        PDF export of run reports (fpdf2, DejaVu fonts)
 │   │   └── training_service.py     Dataset analysis, COCO→YOLO conversion, YOLO training, ONNX export
 │   │
 │   └── pages/                      One file per browser page
@@ -239,6 +253,7 @@ repo/
 │       ├── dashboard.py            /          (teacher only — live grid)
 │       ├── history.py              /history   (teacher: all; student: own)
 │       ├── analytics.py            /analytics (teacher: all; student: own)
+│       ├── reports.py              /reports   (teacher only — per-run reports, alerts, CSV/PDF)
 │       ├── users.py                /users     (teacher only)
 │       ├── groups.py               /groups    (teacher only)
 │       ├── schedules.py            /schedules (teacher only)
@@ -254,6 +269,8 @@ repo/
     ├── test_imaging.py             postprocess, img_to_b64
     ├── test_file_browser.py        _list_entries: ordering, filtering, error handling
     ├── test_database.py            DB schema, CRUD, query filters, auto-assign
+    ├── test_runs.py                Monitoring-run lifecycle, report aggregates, migration
+    ├── test_rate_limit.py          Login rate limiter (window, lockout, expiry)
     ├── test_monitor.py             MonitorController lifecycle, drain_worker
     └── test_veyon.py               Veyon client (all network calls mocked)
 ```
@@ -318,10 +335,16 @@ detection_class            ← YOLO class registry, seeded from DEFAULT_CLASSES
 ml_model                   ← imported / trained YOLO model records
 model_class                ← maps each model's output class index → detection_class
                               (lets two models map the same class at different indices)
+monitoring_run             ← one row per monitoring session (manual or scheduled)
+                              • trigger_type — 'manual' | 'schedule'
+                              • schedule_id / group_name / model_id / started_by
+                              • status — running | finished | interrupted
+                              • started_at / ended_at — powers the Reports page
 detection_event            ← one row per captured frame, always logged
                               • computer_id → computer
                               • user_id     → user (nullable — assigned later)
                               • model_id    → ml_model (nullable)
+                              • run_id      → monitoring_run (nullable)
                               • os_username — raw Windows login (e.g. "Lina")
                               • frame_blob  — annotated JPEG stored as BLOB
                               • had_detection — 0/1 convenience flag
@@ -333,7 +356,7 @@ notification               ← alert records with read/unread state
 audit_log                  ← immutable trail of significant user actions
 ```
 
-All foreign keys are enforced with `PRAGMA foreign_keys = ON`. The schema is clean-slate (`CREATE TABLE IF NOT EXISTS`) — no incremental migrations. To change the schema after a release, add a versioned migration step in `schema.py`.
+All foreign keys are enforced with `PRAGMA foreign_keys = ON`. The base schema is `CREATE TABLE IF NOT EXISTS`; post-release changes live in `_migrate()` in `schema.py` as idempotent steps that run on every startup (e.g. v1.2.0 adds `monitoring_run` and `detection_event.run_id` to databases created before the Reports feature).
 
 ---
 
@@ -345,6 +368,7 @@ All foreign keys are enforced with `PRAGMA foreign_keys = ON`. The schema is cle
 | History — all students | ❌ | ✅ | ❌ |
 | History — own records | ❌ | ❌ | ✅ |
 | Analytics | ❌ | ✅ | own only |
+| Reports (per-run) | ❌ | ✅ | ❌ |
 | Users page | ✅ | ✅ | ❌ |
 | Groups & Schedules | ❌ | ✅ | ❌ |
 | Models (import/train) | ✅ | ✅ | ❌ |
@@ -429,6 +453,9 @@ pytest tests/test_config.py::TestCollectCfgKeyData -v
 | `test_imaging.py` | Bounding-box postprocessing, base64 encoding, image immutability |
 | `test_file_browser.py` | Directory listing, extension/mode filtering, permission errors |
 | `test_database.py` | Schema, all CRUD, query filters, auto-assign logic |
+| `test_runs.py` | Monitoring-run lifecycle, report aggregates, alert queries, PDF export, legacy-DB migration |
+| `test_model_classes.py` | Reading a model's embedded class names (index→name mapping) |
+| `test_rate_limit.py` | Login rate limiter: window, lockout, expiry, per-key isolation |
 | `test_monitor.py` | Username parsing, drain worker, `MonitorController` lifecycle |
 | `test_veyon.py` | Port check, image decode, authenticate, framebuffer grab, user fetch, computer discovery |
 
@@ -446,8 +473,8 @@ test-unit ──┐
 test-db   ──┘
 ```
 
-- **test-unit** — all mocked tests (`test_auth`, `test_config`, `test_imaging`, `test_file_browser`, `test_monitor`, `test_veyon`)
-- **test-db** — database tests against a real SQLite file (`test_database`)
+- **test-unit** — all mocked tests (`test_auth`, `test_config`, `test_imaging`, `test_file_browser`, `test_monitor`, `test_rate_limit`, `test_veyon`)
+- **test-db** — database tests against a real SQLite file (`test_database`, `test_runs`, `test_model_classes`)
 - **build** — PyInstaller `.exe`; on tagged commits also zips and publishes a GitHub Release
 
 ---

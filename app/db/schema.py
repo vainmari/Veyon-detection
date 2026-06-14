@@ -4,11 +4,12 @@ app/db/schema.py
 Database schema creation and seed data.
 
 init_db()              — idempotent CREATE TABLE IF NOT EXISTS for every table.
+_migrate()             — idempotent post-release migration steps (see below).
 seed_classes()         — inserts the default detection class set if empty.
 ensure_default_admin() — creates the initial admin account when DB is empty.
 
-This is the initial public release; no incremental migrations are kept. If you
-need to change the schema after a release, add a versioned migration step here.
+Schema changes after a release go into _migrate() as idempotent steps —
+init_db() runs on every startup, so each step must be a no-op once applied.
 """
 from __future__ import annotations
 
@@ -129,12 +130,33 @@ def init_db() -> None:
             created_at            TEXT    NOT NULL
         );
 
+        -- monitoring runs ─────────────────────────────────────────────────────
+        -- One row per monitoring session (manual Start/Stop or scheduler-driven).
+        -- trigger_type: 'manual' | 'schedule'
+        -- group_name:   denormalised label ('' = all computers) so the report
+        --               survives later group renames/deletions.
+        -- status:       'running' | 'finished' | 'interrupted' (process died
+        --               before stop — repaired by finish_stale_runs() on boot)
+        CREATE TABLE IF NOT EXISTS monitoring_run (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            trigger_type TEXT    NOT NULL DEFAULT 'manual',
+            schedule_id  INTEGER REFERENCES schedule(id) ON DELETE SET NULL,
+            group_name   TEXT,
+            model_id     INTEGER REFERENCES ml_model(id) ON DELETE SET NULL,
+            started_by   INTEGER REFERENCES user(id)     ON DELETE SET NULL,
+            status       TEXT    NOT NULL DEFAULT 'running',
+            started_at   TEXT    NOT NULL,
+            ended_at     TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_run_started ON monitoring_run(started_at);
+
         -- detection events ────────────────────────────────────────────────────
         CREATE TABLE IF NOT EXISTS detection_event (
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
             computer_id      INTEGER NOT NULL REFERENCES computer(id)   ON DELETE CASCADE,
             user_id          INTEGER          REFERENCES user(id)        ON DELETE SET NULL,
             model_id         INTEGER          REFERENCES ml_model(id)   ON DELETE SET NULL,
+            run_id           INTEGER          REFERENCES monitoring_run(id) ON DELETE SET NULL,
             os_username      TEXT,
             detected_at      TEXT    NOT NULL,
             frame_blob       BLOB,
@@ -223,12 +245,33 @@ def init_db() -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_mc_model ON model_class(model_id);
     """)
+    _migrate(c)
     # Seed roles idempotently after CREATE TABLE IF NOT EXISTS
     c.executemany(
         "INSERT OR IGNORE INTO role (name) VALUES (?)",
         [("admin",), ("teacher",), ("student",)],
     )
     c.commit()
+
+
+def _migrate(c) -> None:
+    """
+    Versioned migration steps for databases created before a schema change.
+    Each step must be idempotent — init_db() runs on every startup.
+
+    v1.2.0 — monitoring_run table + detection_event.run_id (reports feature).
+    """
+    event_cols = {r[1] for r in c.execute("PRAGMA table_info(detection_event)")}
+    if "run_id" not in event_cols:
+        c.execute(
+            "ALTER TABLE detection_event ADD COLUMN run_id INTEGER "
+            "REFERENCES monitoring_run(id) ON DELETE SET NULL"
+        )
+    # Outside the IF: on a fresh DB the column comes from CREATE TABLE above
+    # and this is the only place that creates the index.
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS idx_event_run ON detection_event(run_id)"
+    )
 
 
 def seed_classes() -> None:

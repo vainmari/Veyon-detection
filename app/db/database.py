@@ -16,6 +16,7 @@ Sub-module layout
   detection.py  — detection_class, detection_event, detection rows
   alerts.py     — alert rules (on detection_class) + notifications (JOINed)
   ml_models.py  — ml_model (includes training config) + sync_classes_from_model
+  runs.py       — monitoring_run lifecycle + per-run report aggregates
   analytics.py  — read-only aggregate queries
 """
 from app.db._core import DB_PATH, _tls, _conn, _now                      # noqa: F401
@@ -62,6 +63,12 @@ from app.db.ml_models import (                                             # noq
     create_ml_model, update_ml_model, get_active_model, get_model_by_id,
     set_active_model, list_models, delete_model,
     sync_classes_from_model, get_class_ids_for_model,
+)
+from app.db.runs import (                                                   # noqa: F401
+    create_run, set_run_model, finish_run, finish_stale_runs,
+    list_runs, get_run, run_short_label,
+    get_run_class_summary, get_run_student_summary,
+    get_run_computer_summary, get_run_detections, get_run_alerts,
 )
 from app.db.analytics import (                                             # noqa: F401
     get_summary_stats, get_class_distribution,

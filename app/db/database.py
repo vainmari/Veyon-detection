@@ -62,7 +62,7 @@ from app.db.alerts import (                                                # noq
 from app.db.ml_models import (                                             # noqa: F401
     create_ml_model, update_ml_model, get_active_model, get_model_by_id,
     set_active_model, list_models, delete_model,
-    sync_classes_from_model, get_class_ids_for_model,
+    sync_classes_from_model, sync_classes_from_file, get_class_ids_for_model,
 )
 from app.db.runs import (                                                   # noqa: F401
     create_run, set_run_model, finish_run, finish_stale_runs,

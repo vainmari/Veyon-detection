@@ -42,6 +42,7 @@ from app.db.database import (
     list_schedules_using_model,
     log_action,
     set_active_model,
+    sync_classes_from_file,
     sync_classes_from_model,
     update_ml_model,
     update_schedule,
@@ -229,6 +230,30 @@ def _parse_class_names(raw: str) -> list[str]:
     return [n.strip() for n in raw.split(",") if n.strip()]
 
 
+def _names_from_bytes(raw: bytes, filename: str) -> list[str] | None:
+    """
+    Read the class names embedded in an uploaded model file (the upload only
+    gives us bytes, but the readers need a path), via a short-lived temp file.
+    Returns the index-ordered names, or None if the file has no name metadata.
+    Safe to call off the UI thread (run.io_bound).
+    """
+    import os
+    import tempfile
+    from app.core.yolo import read_model_class_names
+
+    suffix = ".pt" if filename.lower().endswith(".pt") else ".onnx"
+    tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    try:
+        tmp.write(raw)
+        tmp.close()
+        return read_model_class_names(tmp.name)
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+
+
 # ── Model library ─────────────────────────────────────────────────────────────
 
 @ui.refreshable
@@ -258,6 +283,14 @@ def _model_library() -> None:
                 imp_file["name"] = name
                 imp_msg.set_text(f"✅  {name}  ({len(raw)//1024} KB)")
                 imp_msg.classes(replace="text-sm text-green-400")
+                # Pre-fill the class list from the names embedded in the file so
+                # the user only reviews/edits instead of typing from scratch.
+                names = await run.io_bound(_names_from_bytes, raw, name)
+                if names:
+                    imp_classes.set_value(", ".join(names))
+                    imp_msg.set_text(
+                        f"✅  {name} — "
+                        + t("models_classes_from_file").format(n=len(names)))
 
             ui.upload(
                 label=t("models_drop_file"),
@@ -494,7 +527,30 @@ def _model_library() -> None:
                 ui.notify(t("models_edit_saved"), type="positive")
                 _model_library.refresh()
 
+            async def do_sync_from_file() -> None:
+                # Refresh this model's class list/mapping from the names embedded
+                # in its weight file. Updates only the model's metadata — it does
+                # NOT alter any previously recorded detections.
+                mid = edit_mid[0]
+                if mid is None:
+                    return
+                res = await run.io_bound(sync_classes_from_file, mid)
+                if not res["ok"]:
+                    ui.notify(t("models_sync_failed"), type="warning")
+                    return
+                edit_classes.set_value(", ".join(res["names"]))
+                from app.core.auth import get_session_user
+                _u = get_session_user()
+                log_action("model.update", user_id=_u["id"] if _u else None,
+                           entity="ml_model", entity_id=mid,
+                           detail="classes synced from model file")
+                ui.notify(t("models_sync_done"), type="positive")
+                _model_library.refresh()
+
             ui.button(t("schedules_save"), icon="save", on_click=do_save).props("color=primary")
+            ui.button(t("models_sync_from_file"), icon="sync",
+                      on_click=do_sync_from_file).props("flat color=primary") \
+                .tooltip(t("models_sync_tooltip"))
             ui.button(t("models_cancel"), on_click=edit_dlg.close).props("flat")
 
     # ── Model-delete conflict dialog ──────────────────────────────────────────

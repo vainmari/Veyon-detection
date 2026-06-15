@@ -480,5 +480,10 @@
   "reports_shots_section": "Įspėjimų ekrano nuotraukos",
   "reports_shots_none": "Šios sesijos įspėjimams ekrano nuotraukos neišsaugotos.",
   "models_used_embedded_classes": "Naudojami modelio faile įrašyti klasių pavadinimai: {names}",
-  "reports_run_word": "Sesija"
+  "reports_run_word": "Sesija",
+  "models_classes_from_file": "Iš failo nuskaitytos {n} klasės — redaguokite, jei reikia",
+  "models_sync_from_file": "Sinchronizuoti klases iš failo",
+  "models_sync_tooltip": "Iš naujo nuskaityti modelio faile įrašytus klasių pavadinimus ir atnaujinti šio modelio klasių sąrašą. Anksčiau įrašytų aptikimų nekeičia.",
+  "models_sync_done": "Klasių sąrašas atnaujintas iš modelio failo.",
+  "models_sync_failed": "Nepavyko nuskaityti klasių pavadinimų iš modelio failo — paliktas dabartinis sąrašas."
 }

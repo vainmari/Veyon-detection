@@ -22,6 +22,7 @@ The reference configuration targets **academic integrity** — detecting unautho
   - [Features](#features)
   - [Screenshots](#screenshots)
   - [Use Cases](#use-cases)
+  - [Ethics \& Responsible Use](#ethics--responsible-use)
   - [Quick Start](#quick-start)
   - [Installation](#installation)
     - [1. Configure Veyon (required, on every machine)](#1-configure-veyon-required-on-every-machine)
@@ -82,6 +83,39 @@ The reference configuration targets **academic integrity** — detecting unautho
 - **Corporate compliance & security monitoring** — detect prohibited tools or data-handling patterns on managed endpoints.
 
 All analysis runs locally against your own Veyon-managed machines — no screen content leaves your network.
+
+---
+
+## Ethics & Responsible Use
+
+This software captures and analyses the screens of other people. That power
+carries responsibility — **monitoring must never be secret.**
+
+- **Inform people first.** Everyone whose screen may be observed must be told —
+  clearly and in advance — that monitoring takes place, what is captured, when,
+  by whom, and why. Covert or surreptitious monitoring is not an acceptable use
+  of this tool.
+- **Get consent and a lawful basis.** Make sure you have the agreement and/or
+  legal grounds to monitor (e.g. exam rules students accepted, an employment
+  policy, institutional approval). Don't deploy it on machines or people you
+  are not authorised to monitor.
+- **Use the narrowest scope.** Monitor only the machines, time windows, and
+  classes you actually need (the Groups and Schedules features exist for this).
+  Don't run it outside the declared sessions.
+- **Protect what you collect.** Screenshots and detections are personal data.
+  Store them securely, restrict access to the roles that need it, keep them only
+  as long as necessary, and delete them when they are no longer needed.
+- **Be transparent and fair.** Treat detections as signals to review with a
+  human, not as automatic proof — the model can be wrong. Give people a way to see and question data about
+  them.
+- **Follow the law.** You are responsible for complying with the privacy,
+  data-protection, education, and employment laws that apply to you (for example
+  GDPR in the EU). When in doubt, consult your institution's legal/DPO guidance.
+
+The authors provide this tool for legitimate, transparent monitoring (academic
+integrity, IT administration, research with consent). Using it to surveil people
+secretly or without a lawful basis is both unethical and, in many jurisdictions,
+illegal — and is explicitly **not** a supported use case.
 
 ---
 

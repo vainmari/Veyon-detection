@@ -482,5 +482,10 @@
   "reports_shots_section": "Alert screenshots",
   "reports_shots_none": "No screenshots are stored for the alerts in this run.",
   "models_used_embedded_classes": "Using class names embedded in the model file: {names}",
-  "reports_run_word": "Run"
+  "reports_run_word": "Run",
+  "models_classes_from_file": "{n} classes read from file — edit if needed",
+  "models_sync_from_file": "Sync classes from file",
+  "models_sync_tooltip": "Re-read the class names embedded in the model file and update this model's class list. Does not change previously recorded detections.",
+  "models_sync_done": "Class list updated from the model file.",
+  "models_sync_failed": "Couldn't read class names from the model file — kept the current list."
 }

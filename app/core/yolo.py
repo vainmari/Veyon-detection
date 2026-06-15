@@ -25,6 +25,41 @@ def onnx_static_batch_size(path: str) -> Optional[int]:
     except Exception:
         return None
 
+def read_model_class_names(path: str) -> Optional[list[str]]:
+    """
+    Return the class names embedded in a model file, ordered by class index
+    (so result[i] is the name the model emits for output index i) — or None
+    if the file has no usable name metadata.
+
+    This is the authoritative index→name mapping the model actually uses at
+    inference time. The DB's model_class mapping MUST be built from this, not
+    from hand-typed names, or History will mislabel detections (the live
+    preview uses these embedded names while History used the typed list).
+
+    ONNX: read from the metadata 'names' prop (cheap — no full model load).
+    .pt : read via ultralytics, which loads the checkpoint's names dict.
+    """
+    p = str(path).lower()
+    try:
+        if p.endswith(".onnx"):
+            import ast
+            import onnxruntime as ort
+            sess = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
+            raw = sess.get_modelmeta().custom_metadata_map.get("names")
+            names = ast.literal_eval(raw) if raw else None
+        else:
+            names = YOLO(path, task="detect").names
+    except Exception:
+        return None
+    if not isinstance(names, dict) or not names:
+        return None
+    try:
+        return [str(names[i]) for i in range(len(names))]
+    except (KeyError, TypeError):
+        # Non-contiguous or non-integer keys — not a usable index mapping.
+        return None
+
+
 _model:      Optional[YOLO] = None
 _model_lock: threading.Lock = threading.Lock()
 

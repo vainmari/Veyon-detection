@@ -28,7 +28,7 @@ from datetime import datetime
 from pathlib import Path
 
 import yaml
-from nicegui import app as nicegui_app, events, ui
+from nicegui import app as nicegui_app, events, run, ui
 
 import app.state as state
 from app.config import apply_active_model
@@ -352,8 +352,8 @@ def _model_library() -> None:
                     imp_msg.classes(replace="text-sm text-red-400")
                     return
 
-                names = _parse_class_names(imp_classes.value)
-                if not names:
+                typed_names = _parse_class_names(imp_classes.value)
+                if not typed_names:
                     imp_msg.set_text(t("models_err_no_class"))
                     imp_msg.classes(replace="text-sm text-red-400")
                     return
@@ -361,6 +361,22 @@ def _model_library() -> None:
                     imp_msg.set_text(t("models_err_no_name"))
                     imp_msg.classes(replace="text-sm text-red-400")
                     return
+
+                # The class names embedded in the model file are the authoritative
+                # index→name mapping used at inference time. Prefer them so History
+                # never disagrees with the live preview; fall back to the typed list
+                # only when the file carries no name metadata.
+                from app.core.yolo import read_model_class_names
+                embedded = await run.io_bound(read_model_class_names, onnx_path)
+                if embedded:
+                    names = embedded
+                    if [n.strip() for n in typed_names] != embedded:
+                        ui.notify(
+                            t("models_used_embedded_classes").format(
+                                names=", ".join(embedded)),
+                            type="info", timeout=6000)
+                else:
+                    names = typed_names
 
                 is_pt = onnx_path.endswith(".pt")
                 try:
@@ -465,6 +481,10 @@ def _model_library() -> None:
                     precision    = float(edit_prec.value    or 0),
                     recall       = float(edit_recall.value  or 0),
                 )
+                # Rebuild the index→class mapping so the edited class list
+                # actually takes effect in History (without this, model_class
+                # kept the previous mapping and detections were mislabeled).
+                sync_classes_from_model(mid)
                 from app.core.auth import get_session_user
                 _u = get_session_user()
                 log_action("model.update", user_id=_u["id"] if _u else None,

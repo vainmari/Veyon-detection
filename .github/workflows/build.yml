@@ -76,7 +76,12 @@ jobs:
         run: pip install -e ".[dev]"
 
       - name: Run DB tests
-        run: pytest tests/test_database.py --tb=short -q
+        run: >
+          pytest
+          tests/test_database.py
+          tests/test_runs.py
+          tests/test_model_classes.py
+          --tb=short -q
 
   # ── Build (only after both test jobs pass) ───────────────────────────────────
   build:

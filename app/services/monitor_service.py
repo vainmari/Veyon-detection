@@ -40,11 +40,14 @@ from app.db._core import _conn
 from app.services import alert_service
 from app.db.database import (
     auto_create_student,
+    create_run,
+    finish_run,
     get_active_model,
     get_model_by_id,
     get_user_by_id,
     get_user_by_username,
     insert_event,
+    set_run_model,
     upsert_computer,
 )
 
@@ -62,6 +65,8 @@ class MonitorController:
         computers:   Optional[list[dict]] = None,
         model_id:    Optional[int]        = None,
         schedule_id: Optional[int]        = None,
+        started_by:  Optional[int]        = None,
+        group_name:  Optional[str]        = None,
     ) -> None:
         """
         cfg         — settings dict from collect_cfg()
@@ -70,11 +75,18 @@ class MonitorController:
         model_id    — DB id of the ml_model to use; None = use active model.
         schedule_id — DB id of the schedule that triggered this session; used to
                       look up per-schedule notification class overrides.
+        started_by  — user id of the teacher who clicked Start; None for
+                      scheduler-triggered sessions.
+        group_name  — label of the monitored group ('' / None = all computers);
+                      recorded on the session's monitoring_run row for reports.
         """
         self.cfg         = cfg
         self._computers  = computers
         self.model_id    = model_id
         self.schedule_id = schedule_id
+        self.started_by  = started_by
+        self.group_name  = group_name
+        self.run_id: Optional[int] = None
         self._stop = threading.Event()
         self._proc: Optional[object] = None
         # raw_q carries (computer_name, raw_jpeg_bytes, capture_ts) where
@@ -90,6 +102,12 @@ class MonitorController:
     def stop(self) -> None:
         self._stop.set()
         state.running_model_id = None
+        if self.run_id is not None:
+            try:
+                finish_run(self.run_id)
+            except Exception as e:
+                self._log(f"⚠ Failed to finalize run record: {e}")
+            self.run_id = None
         if self._proc:
             try:
                 self._proc.terminate()
@@ -170,6 +188,20 @@ class MonitorController:
             self._log(f"  • {c['name']}  ({c['host']})")
             cid = upsert_computer(c["name"], c["host"])
             state.computer_ids[c["name"]] = cid
+
+        # Record the session for the Reports page. Created only once monitoring
+        # is actually about to start — early validation failures above leave no
+        # run row behind. Closed by stop(); crash leftovers are repaired by
+        # finish_stale_runs() at next startup.
+        try:
+            self.run_id = create_run(
+                trigger_type="schedule" if self.schedule_id else "manual",
+                schedule_id=self.schedule_id,
+                group_name=self.group_name or "",
+                started_by=self.started_by,
+            )
+        except Exception as e:
+            self._log(f"⚠ Failed to create run record: {e}")
 
         for c in computers:
             threading.Thread(
@@ -342,6 +374,11 @@ class MonitorController:
 
         # Publish which model is actually running so UI pages can reflect it.
         state.running_model_id = active_model_id
+        if self.run_id is not None:
+            try:
+                set_run_model(self.run_id, active_model_id)
+            except Exception as e:
+                self._log(f"⚠ Failed to record run model: {e}")
 
         cycle_timing  = cfg.get("detect_cycle_timing", False)
         _agg_lats:  list[float] = []
@@ -432,6 +469,7 @@ class MonitorController:
                                 os_username=os_uname,
                                 frame_bytes=raw_bytes or None,
                                 model_id=active_model_id,
+                                run_id=self.run_id,
                                 _commit=False,
                             )
                             wrote_anything = True

@@ -135,6 +135,7 @@ def _tick() -> None:
                         computers=computers,
                         model_id=sched_model_id,
                         schedule_id=sched_id,
+                        group_name=group_label,
                     )
                     state.monitor.start()
                     state.schedule_triggered   = True

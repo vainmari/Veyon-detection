@@ -166,7 +166,11 @@ def page_dashboard() -> None:
                 computers = [{"name": r["name"], "host": r["host_address"]} for r in rows]
 
             reset_model()
-            state.monitor = MonitorController(cfg, computers=computers)
+            state.monitor = MonitorController(
+                cfg, computers=computers,
+                started_by=current["id"],
+                group_name=gname if gid else "",
+            )
             state.monitor.start()
             state.monitored_group_name = gname if gid else ""
             _mon_names[0] = {c["name"] for c in computers} if computers else set()

@@ -79,6 +79,35 @@ INITIAL_ADMIN_PASSWORD: Optional[str] = os.environ.get("INITIAL_ADMIN_PASSWORD")
 if INITIAL_ADMIN_PASSWORD is not None:
     INITIAL_ADMIN_PASSWORD = INITIAL_ADMIN_PASSWORD.strip() or None
 
+# ── Login rate limiting ────────────────────────────────────────────────────────
+# After LOGIN_MAX_ATTEMPTS failed logins from one client IP within
+# LOGIN_WINDOW_SEC seconds, further attempts from that IP are rejected until
+# the oldest failure ages out of the window. See app/core/rate_limit.py.
+def _env_int(key: str, default: int, minimum: int = 1) -> int:
+    raw = os.environ.get(key, "").strip()
+    if not raw:
+        return default
+    try:
+        return max(minimum, int(raw))
+    except ValueError:
+        log.warning("%s=%r is not a number — using default %d", key, raw, default)
+        return default
+
+
+LOGIN_MAX_ATTEMPTS: int = _env_int("LOGIN_MAX_ATTEMPTS", 5)
+LOGIN_WINDOW_SEC:   int = _env_int("LOGIN_WINDOW_SEC",   300)
+
+# ── Web server binding ─────────────────────────────────────────────────────────
+# 0.0.0.0 (default) exposes the UI to the whole LAN so teachers can open it
+# from other machines. Set BIND_HOST=127.0.0.1 in .env to restrict access to
+# the server machine only (e.g. when fronting the app with a reverse proxy).
+BIND_HOST: str = os.environ.get("BIND_HOST", "0.0.0.0").strip() or "0.0.0.0"
+try:
+    BIND_PORT: int = int(os.environ.get("BIND_PORT", "8080").strip() or "8080")
+except ValueError:
+    log.warning("BIND_PORT is not a number — falling back to 8080")
+    BIND_PORT = 8080
+
 
 # ── Keyring (Veyon logon password) ────────────────────────────────────────────
 _KEYRING_SERVICE   = "veyon-ai-monitor"

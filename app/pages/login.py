@@ -5,16 +5,22 @@ Login page  /login
 No nav bar — shown to unauthenticated users.
 Redirects teacher → /   (dashboard)
 Redirects student → /history
+
+Brute-force protection: failed attempts are rate-limited per client IP
+(see app/core/rate_limit.py). The check runs server-side in do_login, so
+it cannot be bypassed by reloading the page.
 """
+from fastapi import Request
 from nicegui import ui
 
+from app.core import rate_limit
 from app.core.auth import get_session_user, set_session_user
 from app.db.database import verify_password
 from app.translate import t
 
 
 @ui.page("/login")
-def page_login() -> None:
+def page_login(request: Request) -> None:
     # Already logged in → skip
     user = get_session_user()
     if user:
@@ -42,12 +48,23 @@ def page_login() -> None:
             ).props("outlined dense").classes("w-full")
             error    = ui.label("").classes("text-red-400 text-sm")
 
+            # Captured at page build; the websocket callback below reuses it.
+            client_ip = request.client.host if request.client else "unknown"
+
             def do_login() -> None:
+                wait = rate_limit.retry_after(client_ip)
+                if wait > 0:
+                    error.set_text(
+                        t("login_rate_limited").format(s=int(wait) + 1))
+                    password.set_value("")
+                    return
                 u = verify_password(username.value.strip(), password.value)
                 if u is None:
+                    rate_limit.record_failure(client_ip)
                     error.set_text(t("login_invalid"))
                     password.set_value("")
                     return
+                rate_limit.record_success(client_ip)
                 set_session_user(u)
                 if u["role"] == "admin":
                     ui.navigate.to("/users")

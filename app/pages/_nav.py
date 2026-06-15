@@ -6,8 +6,8 @@ Shared navigation bar — role-aware.
 Roles
 ─────
   admin   — Users, Models, Audit Log, Settings
-  teacher — Dashboard, History, Analytics, Alert Rules, Groups, Schedules,
-            Users, Models, Audit Log
+  teacher — Dashboard, History, Analytics, Reports, Alert Rules, Groups,
+            Schedules, Users, Models, Audit Log
             + Start/Stop monitor + notification bell
   student — My History, My Analytics
 """
@@ -48,6 +48,7 @@ def nav(current_user: dict) -> None:
                 ("nav_dashboard",   "/"),
                 ("nav_history",     "/history"),
                 ("nav_analytics",   "/analytics"),
+                ("nav_reports",     "/reports"),
                 ("nav_alert_rules", "/alerts"),
                 ("nav_groups",      "/groups"),
                 ("nav_schedules",   "/schedules"),
@@ -90,7 +91,8 @@ def nav(current_user: dict) -> None:
                     ui.notify(t("dash_cfg_error").format(e=e), type="negative")
                     return
                 reset_model()
-                state.monitor = MonitorController(cfg)
+                state.monitor = MonitorController(
+                    cfg, started_by=current_user["id"], group_name="")
                 state.monitor.start()
 
             def do_stop() -> None:

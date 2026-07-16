@@ -258,6 +258,8 @@
   "models_col_status": "Būsena",
   "models_col_active": "Aktyvus",
   "models_col_trained": "Apmokytas",
+  "models_col_precision": "Preciziškumas",
+  "models_col_recall": "Atkūrimas",
   "models_activated": "✅  „{name}“ dabar aktyvus — paleiskite stebėjimą iš naujo, kad pritaikytumėte.",
   "models_deleted": "Modelis ištrintas.",
   "models_no_ready": "Kito paruošto modelio nėra — aktyvuokite rankiniu būdu.",

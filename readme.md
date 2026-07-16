@@ -45,12 +45,12 @@ The reference configuration targets **academic integrity** — detecting unautho
 
 ## Features
 
-- **🔒 100% local & private** — screens are processed on your own network and stored in a local SQLite database; nothing is sent to the cloud.
+- **🔒 100% local & private** — screens are processed on your own network and stored in a local SQLite database; nothing is sent to the cloud. A configurable retention window auto-purges old events.
 - **⚡ Real-time on CPU** — NMS-free YOLO26n inference at ~15 ms/frame on a CPU; full classroom detection cycle in 3–4 seconds. No GPU required (CUDA used automatically if present).
 - **🎯 High accuracy** — 0.984 mAP50-95 on the 7-class reference test set.
 - **🧩 Veyon-native** — captures through the existing Veyon WebAPI; no extra agent to install on monitored machines.
 - **🤖 Train your own models in-app** — upload a dataset and train or fine-tune new detection classes from the UI (no ML expertise needed); exports to ONNX automatically.
-- **👥 Role-based access** — admin / teacher / student roles with distinct capabilities (RBAC); login attempts are rate-limited per client IP.
+- **👥 Role-based access** — admin / teacher / student roles with distinct capabilities (RBAC); login attempts are rate-limited per client IP and per username; passwords require a minimum length and are verified in constant time.
 - **📊 Run reports** — every monitoring session (manual or scheduled) is recorded; the Reports page shows prohibited-class alerts (who, when, with per-alert screenshots) plus per-class / per-student / per-computer breakdowns, and exports to CSV or print-ready PDF.
 - **🌐 Bilingual UI** — English and Lithuanian.
 - **🐍 Pure-Python UI** — built with NiceGUI; no separate JavaScript frontend to maintain.
@@ -104,7 +104,9 @@ carries responsibility — **monitoring must never be secret.**
   Don't run it outside the declared sessions.
 - **Protect what you collect.** Screenshots and detections are personal data.
   Store them securely, restrict access to the roles that need it, keep them only
-  as long as necessary, and delete them when they are no longer needed.
+  as long as necessary, and delete them when they are no longer needed — set
+  **Data retention** in Settings (or `VEYON_RETENTION_DAYS`) so old events are
+  purged automatically instead of accumulating forever.
 - **Be transparent and fair.** Treat detections as signals to review with a
   human, not as automatic proof — the model can be wrong. Give people a way to see and question data about
   them.
@@ -209,12 +211,17 @@ Copy `.env.example` to `.env` at the repo root (or next to the EXE in `dist/`) a
 | `INITIAL_ADMIN_PASSWORD` | First run | Password of the bootstrap admin account. The app **exits** on a fresh DB if this is unset. |
 | `BIND_HOST` | No | Interface the web UI listens on. Default `0.0.0.0` (reachable from the LAN). Set `127.0.0.1` to restrict to the local machine, e.g. behind a TLS reverse proxy. |
 | `BIND_PORT` | No | Web UI port (default `8080`). |
-| `LOGIN_MAX_ATTEMPTS` | No | Failed logins allowed per client IP inside the window before lockout (default `5`). |
+| `LOGIN_MAX_ATTEMPTS` | No | Failed logins allowed per client IP (and, separately, per username) inside the window before lockout (default `5`). |
 | `LOGIN_WINDOW_SEC` | No | Sliding-window length in seconds for login rate limiting (default `300`). |
+| `PASSWORD_MIN_LENGTH` | No | Minimum length for passwords set through the UI, enforced server-side (default `8`). |
+| `TLS_ENABLED` | No | `true` serves the UI over HTTPS (default `false`). A self-signed certificate is auto-generated on first start if none exists — see note below. |
+| `TLS_CERTFILE` / `TLS_KEYFILE` | No | Certificate / private-key paths (default `data/tls/cert.pem` / `data/tls/key.pem`). Point at an institution-issued pair to avoid the self-signed browser warning. |
 
 All `VEYON_*` variables in `.env.example` are optional — they override the built-in defaults listed in the Configuration section below. Settings saved through `/settings` take highest precedence.
 
 **Logon password** (Veyon `logon` auth mode) is stored in the OS credential vault (Windows Credential Manager / macOS Keychain / Secret Service on Linux) via `keyring` — never written to disk as plaintext.
+
+**TLS / HTTPS.** By default the UI is served over plain HTTP, which means session cookies and screen captures cross the LAN unencrypted. Set `TLS_ENABLED=true` to serve HTTPS instead: on first start a self-signed certificate is generated at `data/tls/` (valid 10 years, covering `localhost`, the hostname, and the machine's LAN IP), and the session cookie gets the `Secure` flag. Browsers show a one-time *"connection is not private"* warning for self-signed certificates — click **Advanced → Proceed**, or import `data/tls/cert.pem` into the client machines' trusted-root store to remove the warning entirely. If your institution has an internal CA, point `TLS_CERTFILE` / `TLS_KEYFILE` at its certificate and no warning appears. If certificate setup fails the app refuses to start rather than silently falling back to plaintext.
 
 ---
 
@@ -251,7 +258,7 @@ repo/
 │   │
 │   ├── core/                       Pure utilities — no UI, no business logic
 │   │   ├── auth.py                 Session helpers (get/set/clear, require_auth)
-│   │   ├── rate_limit.py           Sliding-window login rate limiter (per client IP)
+│   │   ├── rate_limit.py           Sliding-window login rate limiter (per client IP + per username)
 │   │   ├── colors.py               Shared 32-color palette (boxes, badges, charts)
 │   │   ├── imaging.py              postprocess(), img_to_b64()
 │   │   ├── veyon.py                Veyon WebAPI client (auth, framebuffer, user fetch)
@@ -270,13 +277,15 @@ repo/
 │   │   ├── runs.py                 Monitoring-run lifecycle + per-run report queries
 │   │   ├── ml_models.py            ML model registry + sync_classes_from_model()
 │   │   ├── alerts.py               Notification read/create/query
-│   │   └── audit.py                Immutable audit log writes and queries
+│   │   ├── audit.py                Immutable audit log writes and queries
+│   │   └── retention.py            Data-retention purge (delete events older than N days)
 │   │
 │   ├── services/
 │   │   ├── monitor_service.py      MonitorController + drain_worker background thread
 │   │   ├── alert_service.py        Matches detections against rules, inserts notifications
 │   │   ├── schedule_service.py     Daemon that auto-starts/stops monitoring on schedule
 │   │   ├── report_export.py        PDF export of run reports (fpdf2, DejaVu fonts)
+│   │   ├── retention_service.py    Hourly daemon enforcing the data-retention policy
 │   │   └── training_service.py     Dataset analysis, COCO→YOLO conversion, YOLO training, ONNX export
 │   │
 │   └── pages/                      One file per browser page
@@ -305,6 +314,8 @@ repo/
     ├── test_database.py            DB schema, CRUD, query filters, auto-assign
     ├── test_runs.py                Monitoring-run lifecycle, report aggregates, migration
     ├── test_rate_limit.py          Login rate limiter (window, lockout, expiry)
+    ├── test_retention.py           Retention purge (cutoff, cascades, batching)
+    ├── test_tls.py                 Self-signed cert generation, TLS_ENABLED wiring
     ├── test_monitor.py             MonitorController lifecycle, drain_worker
     └── test_veyon.py               Veyon client (all network calls mocked)
 ```
@@ -445,6 +456,7 @@ All settings are editable at runtime via the Settings page and persisted between
 | `batch_max_cpu` | `16` | Max frames per inference call on CPU |
 | `detect_cycle_timing` | `false` | Log full capture→detection latency to `latency_log.csv` |
 | `alert_threshold` | `1` | Minimum consecutive detections per class to trigger an alert |
+| `retention_days` | `0` | Permanently delete detection events (screenshots included) older than this many days, checked hourly. `0` = keep forever |
 
 </details>
 
@@ -490,6 +502,8 @@ pytest tests/test_config.py::TestCollectCfgKeyData -v
 | `test_runs.py` | Monitoring-run lifecycle, report aggregates, alert queries, PDF export, legacy-DB migration |
 | `test_model_classes.py` | Reading a model's embedded class names (index→name mapping) |
 | `test_rate_limit.py` | Login rate limiter: window, lockout, expiry, per-key isolation |
+| `test_retention.py` | Data-retention purge: cutoff selection, FK cascades, batching, audit entry |
+| `test_tls.py` | Self-signed certificate generation, reuse of existing certs, `TLS_ENABLED` wiring |
 | `test_monitor.py` | Username parsing, drain worker, `MonitorController` lifecycle |
 | `test_veyon.py` | Port check, image decode, authenticate, framebuffer grab, user fetch, computer discovery |
 
@@ -507,8 +521,8 @@ test-unit ──┐
 test-db   ──┘
 ```
 
-- **test-unit** — all mocked tests (`test_auth`, `test_config`, `test_imaging`, `test_file_browser`, `test_monitor`, `test_rate_limit`, `test_veyon`)
-- **test-db** — database tests against a real SQLite file (`test_database`, `test_runs`, `test_model_classes`)
+- **test-unit** — all mocked tests (`test_auth`, `test_config`, `test_imaging`, `test_file_browser`, `test_monitor`, `test_rate_limit`, `test_tls`, `test_veyon`)
+- **test-db** — database tests against a real SQLite file (`test_database`, `test_runs`, `test_model_classes`, `test_retention`)
 - **build** — PyInstaller `.exe`; on tagged commits also zips and publishes a GitHub Release
 
 ---

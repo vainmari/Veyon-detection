@@ -26,6 +26,7 @@ from app.db.schema import (                                                # noq
     ensure_default_admin, ensure_default_teacher,
 )
 from app.db.users import (                                                 # noqa: F401
+    MIN_PASSWORD_LENGTH, validate_password,
     list_roles, get_role_id,
     create_user, update_password, delete_user,
     auto_assign_user_events, nullify_user_events,
@@ -48,6 +49,7 @@ from app.db.schedules import (                                              # no
     list_schedules_using_model,
 )
 from app.db.audit import log_action, list_audit_log                        # noqa: F401
+from app.db.retention import purge_old_events                              # noqa: F401
 from app.db.detection import (                                             # noqa: F401
     list_classes, get_class_by_model_index,
     insert_event, get_event_frame_b64,

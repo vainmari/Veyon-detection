@@ -37,12 +37,12 @@ def db(tmp_path, monkeypatch):
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _teacher(db, name="admin"):
-    db.create_user(name, "pw", "teacher")
+    db.create_user(name, "password1", "teacher")
     return db.get_user_by_username(name)
 
 
 def _student(db, name="jonas", created_by=None):
-    db.create_user(name, "pw", "student", created_by_id=created_by)
+    db.create_user(name, "password1", "student", created_by_id=created_by)
     return db.get_user_by_username(name)
 
 
@@ -138,68 +138,178 @@ class TestSchema:
 
 class TestUsers:
     def test_create_and_retrieve(self, db):
-        uid = db.create_user("bob", "pw", "student")
+        uid = db.create_user("bob", "password1", "student")
         u = db.get_user_by_id(uid)
         assert u["username"] == "bob" and u["role"] == "student"
 
     def test_role_string_returned_from_join(self, db):
         """user["role"] must be the role name string, not an integer id."""
-        db.create_user("alice", "pw", "teacher")
+        db.create_user("alice", "password1", "teacher")
         u = db.get_user_by_username("alice")
         assert u["role"] == "teacher"
         assert isinstance(u["role"], str)
 
     def test_unknown_role_raises(self, db):
         with pytest.raises(ValueError, match="Unknown role"):
-            db.create_user("x", "pw", "superuser")
+            db.create_user("x", "password1", "superuser")
 
     def test_duplicate_raises(self, db):
-        db.create_user("alice", "pw", "student")
+        db.create_user("alice", "password1", "student")
         with pytest.raises(sqlite3.IntegrityError):
-            db.create_user("alice", "pw2", "student")
+            db.create_user("alice", "password2", "student")
 
     def test_verify_correct(self, db):
-        db.create_user("carol", "secret", "teacher")
-        assert db.verify_password("carol", "secret") is not None
+        db.create_user("carol", "secret-pass", "teacher")
+        assert db.verify_password("carol", "secret-pass") is not None
 
     def test_verify_wrong(self, db):
-        db.create_user("dave", "right", "student")
+        db.create_user("dave", "right-pass", "student")
         assert db.verify_password("dave", "wrong") is None
 
     def test_verify_unknown(self, db):
-        assert db.verify_password("ghost", "pw") is None
+        assert db.verify_password("ghost", "password1") is None
 
     def test_update_password(self, db):
-        db.create_user("eve", "old", "student")
+        db.create_user("eve", "old-pass-123", "student")
         uid = db.get_user_by_username("eve")["id"]
-        db.update_password(uid, "new")
-        assert db.verify_password("eve", "new")
-        assert not db.verify_password("eve", "old")
+        db.update_password(uid, "new-pass-123")
+        assert db.verify_password("eve", "new-pass-123")
+        assert not db.verify_password("eve", "old-pass-123")
 
     def test_delete_user(self, db):
-        db.create_user("frank", "pw", "student")
+        db.create_user("frank", "password1", "student")
         uid = db.get_user_by_username("frank")["id"]
         db.delete_user(uid)
         assert db.get_user_by_username("frank") is None
 
     def test_list_users_returns_role_as_string(self, db):
-        db.create_user("u1", "pw", "teacher")
-        db.create_user("u2", "pw", "student")
+        db.create_user("u1", "password1", "teacher")
+        db.create_user("u2", "password1", "student")
         users = {u["username"]: u for u in db.list_users()}
         assert users["u1"]["role"] == "teacher"
         assert users["u2"]["role"] == "student"
 
     def test_list_users_names(self, db):
-        db.create_user("u1", "pw", "teacher")
-        db.create_user("u2", "pw", "student")
+        db.create_user("u1", "password1", "teacher")
+        db.create_user("u2", "password1", "student")
         names = {u["username"] for u in db.list_users()}
         assert {"u1", "u2"} == names
 
     def test_created_by_stored(self, db):
         t = _teacher(db)
-        db.create_user("pupil", "pw", "student", created_by_id=t["id"])
+        db.create_user("pupil", "password1", "student", created_by_id=t["id"])
         u = db.get_user_by_username("pupil")
         assert u["created_by"] == t["id"]
+
+
+# ── Password policy ───────────────────────────────────────────────────────────
+
+class TestPasswordPolicy:
+    """Server-side minimum-length enforcement on every password-setting path."""
+
+    def test_create_user_rejects_short_password(self, db):
+        with pytest.raises(ValueError, match="at least"):
+            db.create_user("shorty", "a" * (db.MIN_PASSWORD_LENGTH - 1), "student")
+        assert db.get_user_by_username("shorty") is None
+
+    def test_create_user_rejects_empty_password(self, db):
+        with pytest.raises(ValueError):
+            db.create_user("shorty", "", "student")
+
+    def test_create_user_accepts_exact_minimum(self, db):
+        uid = db.create_user("okuser", "a" * db.MIN_PASSWORD_LENGTH, "student")
+        assert db.get_user_by_id(uid) is not None
+
+    def test_update_password_rejects_short(self, db):
+        uid = db.create_user("bob", "password1", "student")
+        with pytest.raises(ValueError):
+            db.update_password(uid, "tiny")
+        assert db.verify_password("bob", "password1") is not None  # unchanged
+
+    def test_activate_user_rejects_short(self, db):
+        uid = db.auto_create_student("Jonas")
+        with pytest.raises(ValueError):
+            db.activate_user(uid, "tiny")
+        assert db.get_user_by_id(uid)["is_active"] == 0  # still inactive
+
+    def test_auto_create_student_exempt(self, db):
+        """Auto-created placeholders use a random internal password — no policy check."""
+        uid = db.auto_create_student("Lina")
+        assert db.get_user_by_id(uid) is not None
+
+    # ── PASSWORD_MIN_LENGTH env override ──────────────────────────────────────
+
+    def test_env_min_length_default(self, monkeypatch):
+        import app.db.users as users_mod
+        monkeypatch.delenv("PASSWORD_MIN_LENGTH", raising=False)
+        assert users_mod._min_password_length() == 8
+
+    def test_env_min_length_override(self, monkeypatch):
+        import app.db.users as users_mod
+        monkeypatch.setenv("PASSWORD_MIN_LENGTH", "12")
+        assert users_mod._min_password_length() == 12
+
+    def test_env_min_length_floor_is_one(self, monkeypatch):
+        """0 or negative must not disable the not-empty check entirely."""
+        import app.db.users as users_mod
+        monkeypatch.setenv("PASSWORD_MIN_LENGTH", "0")
+        assert users_mod._min_password_length() == 1
+
+    def test_env_min_length_garbage_falls_back(self, monkeypatch):
+        import app.db.users as users_mod
+        monkeypatch.setenv("PASSWORD_MIN_LENGTH", "short")
+        assert users_mod._min_password_length() == 8
+
+    def test_validate_uses_module_constant(self, db, monkeypatch):
+        """validate_password reads MIN_PASSWORD_LENGTH at call time."""
+        import app.db.users as users_mod
+        monkeypatch.setattr(users_mod, "MIN_PASSWORD_LENGTH", 12)
+        with pytest.raises(ValueError):
+            db.create_user("strictuser", "elevenchars", "student")  # 11 < 12
+        db.create_user("strictuser", "twelve-chars", "student")     # 12 ok
+
+
+# ── Timing-safe verify_password ───────────────────────────────────────────────
+
+class TestVerifyPasswordTiming:
+    """
+    The bcrypt comparison must run on EVERY login attempt — unknown username,
+    inactive account, or real user alike — so response time can't be used to
+    enumerate valid accounts.
+    """
+
+    @pytest.fixture()
+    def bcrypt_spy(self, monkeypatch):
+        import app.db.users as users_mod
+        calls = []
+        real = users_mod._verify_pw
+
+        def spy(password, hashed):
+            calls.append(hashed)
+            return real(password, hashed)
+
+        monkeypatch.setattr(users_mod, "_verify_pw", spy)
+        return calls
+
+    def test_unknown_user_still_runs_bcrypt(self, db, bcrypt_spy):
+        assert db.verify_password("ghost", "whatever") is None
+        assert len(bcrypt_spy) == 1  # dummy-hash comparison happened
+
+    def test_inactive_user_still_runs_bcrypt(self, db, bcrypt_spy):
+        db.auto_create_student("Jonas")
+        assert db.verify_password("Jonas", "whatever") is None
+        assert len(bcrypt_spy) == 1
+
+    def test_inactive_user_with_known_password_rejected(self, db):
+        """is_active=0 must block login even when the password matches."""
+        uid = db.create_user("frozen", "password1", "student", is_active=False)
+        assert db.get_user_by_id(uid)["is_active"] == 0
+        assert db.verify_password("frozen", "password1") is None
+
+    def test_active_user_unaffected(self, db, bcrypt_spy):
+        db.create_user("carol", "secret-pass", "teacher")
+        assert db.verify_password("carol", "secret-pass") is not None
+        assert len(bcrypt_spy) == 1
 
 
 # ── Computers ─────────────────────────────────────────────────────────────────
@@ -322,7 +432,7 @@ class TestAutoAssign:
         cid = _computer(db)
         for _ in range(3):
             db.insert_event(cid, DETS, os_username="Jonas")
-        uid = db.create_user("Jonas", "pw", "student")
+        uid = db.create_user("Jonas", "password1", "student")
         db.auto_assign_user_events("Jonas", uid)
         rows = db.query_events(user_id=uid)
         assert len(rows) == 3
@@ -330,7 +440,7 @@ class TestAutoAssign:
     def test_case_insensitive_match(self, db):
         cid = _computer(db)
         db.insert_event(cid, [], os_username="JONAS")
-        uid = db.create_user("jonas", "pw", "student")
+        uid = db.create_user("jonas", "password1", "student")
         db.auto_assign_user_events("jonas", uid)
         rows = db.query_events(user_id=uid)
         assert len(rows) == 1
@@ -340,12 +450,12 @@ class TestAutoAssign:
         other = _student(db, "other")
         db.insert_event(cid, [], user_id=other["id"], os_username="other")
         db.insert_event(cid, [], os_username="Jonas")
-        uid = db.create_user("Jonas", "pw", "student")
+        uid = db.create_user("Jonas", "password1", "student")
         db.auto_assign_user_events("Jonas", uid)
         assert len(db.query_events(user_id=uid)) == 1
 
     def test_no_matching_events_is_fine(self, db):
-        uid = db.create_user("newbie", "pw", "student")
+        uid = db.create_user("newbie", "password1", "student")
         assert isinstance(uid, int)
 
     def test_count_anonymous_events(self, db):

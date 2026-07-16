@@ -146,6 +146,32 @@ def _env_bool(key: str, default: bool) -> bool:
     return val.strip().lower() in ("1", "true", "yes")
 
 
+# ── TLS / HTTPS ────────────────────────────────────────────────────────────────
+# TLS_ENABLED=true serves the UI over HTTPS. If the cert/key files don't exist
+# a self-signed pair is generated automatically (see app/core/tls.py) — the
+# browser shows a one-time warning, but session cookies and screen captures
+# stop crossing the LAN in plaintext. Point TLS_CERTFILE / TLS_KEYFILE at an
+# institution-issued cert to avoid the warning.
+TLS_ENABLED: bool = _env_bool("TLS_ENABLED", False)
+_TLS_DIR = _ENV_PATH.parent / "data" / "tls"
+TLS_CERTFILE: str = os.environ.get("TLS_CERTFILE", "").strip() or str(_TLS_DIR / "cert.pem")
+TLS_KEYFILE:  str = os.environ.get("TLS_KEYFILE",  "").strip() or str(_TLS_DIR / "key.pem")
+
+
+def get_ssl_kwargs() -> dict:
+    """
+    Return the ssl_* kwargs for ui.run(), or {} when TLS is disabled.
+    Generation failure raises instead of silently starting in plaintext —
+    an operator who set TLS_ENABLED=true must never get unencrypted HTTP
+    without noticing.
+    """
+    if not TLS_ENABLED:
+        return {}
+    from app.core.tls import ensure_self_signed_cert
+    ensure_self_signed_cert(Path(TLS_CERTFILE), Path(TLS_KEYFILE))
+    return {"ssl_certfile": TLS_CERTFILE, "ssl_keyfile": TLS_KEYFILE}
+
+
 DEFAULTS: dict = {
     # ── Authentication ─────────────────────────────────────────────────────────
     "auth_method":         os.environ.get("VEYON_AUTH_METHOD",         "key"),
@@ -177,6 +203,10 @@ DEFAULTS: dict = {
     "detect_cycle_timing": _env_bool("VEYON_DETECT_CYCLE_TIMING",      False),
     # ── Alert behaviour ────────────────────────────────────────────────────────
     "alert_threshold":     os.environ.get("VEYON_ALERT_THRESHOLD",     "1"),
+    # ── Data retention ─────────────────────────────────────────────────────────
+    # Days to keep detection events (screenshots included); 0 = keep forever.
+    # Enforced hourly by app/services/retention_service.py.
+    "retention_days":      os.environ.get("VEYON_RETENTION_DAYS",      "0"),
 }
 
 

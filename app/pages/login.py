@@ -6,9 +6,11 @@ No nav bar — shown to unauthenticated users.
 Redirects teacher → /   (dashboard)
 Redirects student → /history
 
-Brute-force protection: failed attempts are rate-limited per client IP
-(see app/core/rate_limit.py). The check runs server-side in do_login, so
-it cannot be bypassed by reloading the page.
+Brute-force protection: failed attempts are rate-limited per client IP AND
+per username (see app/core/rate_limit.py), so a shared-IP lab can't be
+locked out wholesale and a distributed guesser is still throttled per
+account. The check runs server-side in do_login, so it cannot be bypassed
+by reloading the page.
 """
 from fastapi import Request
 from nicegui import ui
@@ -52,19 +54,20 @@ def page_login(request: Request) -> None:
             client_ip = request.client.host if request.client else "unknown"
 
             def do_login() -> None:
-                wait = rate_limit.retry_after(client_ip)
+                uname = username.value.strip()
+                wait = rate_limit.login_retry_after(client_ip, uname)
                 if wait > 0:
                     error.set_text(
                         t("login_rate_limited").format(s=int(wait) + 1))
                     password.set_value("")
                     return
-                u = verify_password(username.value.strip(), password.value)
+                u = verify_password(uname, password.value)
                 if u is None:
-                    rate_limit.record_failure(client_ip)
+                    rate_limit.record_login_failure(client_ip, uname)
                     error.set_text(t("login_invalid"))
                     password.set_value("")
                     return
-                rate_limit.record_success(client_ip)
+                rate_limit.record_login_success(client_ip, uname)
                 set_session_user(u)
                 if u["role"] == "admin":
                     ui.navigate.to("/users")

@@ -235,7 +235,7 @@ class TestDetectWorkerDBIntegration:
         db_module.insert_event(cid, [], os_username="Jonas")
         db_module.insert_event(cid, [], os_username="Jonas")
         # Create account and explicitly auto-assign historical events
-        uid = db_module.create_user("Jonas", "pw", "student")
+        uid = db_module.create_user("Jonas", "password1", "student")
         db_module.auto_assign_user_events("Jonas", uid)
         rows = db_module.query_events(user_id=uid)
         assert len(rows) == 2

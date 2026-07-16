@@ -52,6 +52,7 @@ jobs:
           tests/test_file_browser.py
           tests/test_monitor.py
           tests/test_rate_limit.py
+          tests/test_tls.py
           tests/test_veyon.py
           --tb=short -q
 
@@ -81,6 +82,7 @@ jobs:
           tests/test_database.py
           tests/test_runs.py
           tests/test_model_classes.py
+          tests/test_retention.py
           --tb=short -q
 
   # ── Build (only on a version tag, after both test jobs pass) ─────────────────

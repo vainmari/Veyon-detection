@@ -13,12 +13,53 @@ from app.db._core import _conn, _now
 
 # ── Password helpers ──────────────────────────────────────────────────────────
 
+def _min_password_length() -> int:
+    """
+    Minimum password length: PASSWORD_MIN_LENGTH in .env, default 8.
+    Read directly from os.environ (config.py has loaded .env by the time
+    this module is imported at runtime) so the db layer stays free of the
+    nicegui import that app.config drags in. Floor of 1 — the policy can be
+    relaxed but never lets an empty password through. Invalid values fall
+    back to the default. Changes require an app restart.
+    """
+    import os
+    raw = os.environ.get("PASSWORD_MIN_LENGTH", "").strip()
+    if not raw:
+        return 8
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 8
+
+
+# Server-side password policy, enforced in create_user / activate_user /
+# update_password (the UI checks the same constant client-side for nicer
+# error messages). The bootstrap admin (ensure_default_admin) is exempt —
+# the documented admin/admin first-run flow must keep working.
+MIN_PASSWORD_LENGTH = _min_password_length()
+
+
+def validate_password(password: str) -> None:
+    """Raise ValueError when the password fails the policy."""
+    if not password or len(password) < MIN_PASSWORD_LENGTH:
+        raise ValueError(
+            f"Password must be at least {MIN_PASSWORD_LENGTH} characters"
+        )
+
+
 def _hash_pw(password: str) -> str:
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
 
 def _verify_pw(password: str, hashed: str) -> bool:
     return bcrypt.checkpw(password.encode(), hashed.encode())
+
+
+# Compared against when the username doesn't exist, so a login attempt costs
+# one bcrypt verification whether or not the account is real. Without this,
+# unknown usernames returned in microseconds while real ones took ~100 ms —
+# a timing oracle that let an attacker enumerate valid accounts.
+_DUMMY_HASH = _hash_pw("dummy-password-for-constant-time-compare")
 
 
 # All user-returning queries JOIN role so callers get user["role"] as a string.
@@ -65,6 +106,7 @@ def create_user(
     role_id = get_role_id(role)
     if role_id is None:
         raise ValueError(f"Unknown role: {role!r}")
+    validate_password(password)
     c = _conn()
     cur = c.execute(
         "INSERT INTO user (username, hashed_password, role_id, is_active, created_by, created_at) "
@@ -128,6 +170,7 @@ def activate_user(user_id: int, new_password: str) -> None:
     a hot-path IO worker).
     """
     from app.db.audit import _insert_audit
+    validate_password(new_password)
     c = _conn()
     row = c.execute("SELECT username FROM user WHERE id = ?", (user_id,)).fetchone()
     c.execute(
@@ -199,6 +242,7 @@ def nullify_user_events(user_id: int, batch_size: int = 500) -> int:
 
 def update_password(user_id: int, new_password: str) -> None:
     from app.db.audit import _insert_audit
+    validate_password(new_password)
     c = _conn()
     c.execute(
         "UPDATE user SET hashed_password = ? WHERE id = ?",
@@ -229,8 +273,15 @@ def get_user_by_id(user_id: int) -> Optional[dict]:
 
 
 def verify_password(username: str, password: str) -> Optional[dict]:
+    """
+    Timing-safe credential check: the bcrypt comparison always runs — against
+    the real hash when the user exists (active or not), against _DUMMY_HASH
+    otherwise — so response time never reveals whether a username is valid.
+    """
     user = get_user_by_username(username)
-    if user and user.get("is_active") and _verify_pw(password, user["hashed_password"]):
+    hashed = user["hashed_password"] if user else _DUMMY_HASH
+    ok = _verify_pw(password, hashed)
+    if ok and user and user.get("is_active"):
         return user
     return None
 

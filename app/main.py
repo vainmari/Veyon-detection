@@ -16,6 +16,7 @@ from app.config import (
     INITIAL_ADMIN_PASSWORD,
     INITIAL_ADMIN_USERNAME,
     STORAGE_SECRET,
+    get_ssl_kwargs,
 )
 from app.db._core import _conn
 from app.db.database import (
@@ -25,6 +26,7 @@ from app.db.database import (
     seed_classes,
 )
 from app.services.monitor_service import drain_worker
+from app.services.retention_service import start_retention_worker
 from app.services.schedule_service import start_scheduler
 
 log = logging.getLogger(__name__)
@@ -97,7 +99,16 @@ def _startup() -> None:
         log.info("startup: marked %d stale monitoring run(s) as interrupted", n_stale)
     threading.Thread(target=drain_worker, daemon=True, name="drain").start()
     start_scheduler()
+    start_retention_worker()
 
+
+# TLS (opt-in via TLS_ENABLED in .env). get_ssl_kwargs() raises on cert
+# failure rather than falling back to plaintext — never start unencrypted
+# when the operator asked for HTTPS. With TLS on, the session cookie also
+# gets the Secure flag so it is never sent over an http:// connection.
+_ssl = get_ssl_kwargs()
+if _ssl:
+    log.info("TLS enabled — serving HTTPS with certificate %s", _ssl["ssl_certfile"])
 
 ui.run(
     title          = "Veyon AI Monitor",
@@ -107,7 +118,9 @@ ui.run(
     port           = BIND_PORT,
     dark           = True,
     storage_secret = STORAGE_SECRET,
+    session_middleware_kwargs = {"https_only": True} if _ssl else None,
     favicon        = "🎓",
     show           = True,
     reload         = False,
+    **_ssl,
 )

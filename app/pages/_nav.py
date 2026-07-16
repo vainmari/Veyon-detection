@@ -182,12 +182,15 @@ def _user_menu(current_user: dict, dark) -> None:
         err_lbl = ui.label("").classes("text-red-400 text-sm")
 
         def do_change() -> None:
-            from app.db.database import update_password, verify_password
+            from app.db.database import (
+                MIN_PASSWORD_LENGTH, update_password, verify_password,
+            )
             if not verify_password(current_user["username"], current_pw.value):
                 err_lbl.set_text(t("pwd_err_wrong"))
                 return
-            if len(new_pw.value) < 6:
-                err_lbl.set_text(t("pwd_err_short"))
+            if len(new_pw.value) < MIN_PASSWORD_LENGTH:
+                err_lbl.set_text(
+                    t("pwd_err_short").format(n=MIN_PASSWORD_LENGTH))
                 return
             if new_pw.value != confirm_pw.value:
                 err_lbl.set_text(t("pwd_err_mismatch"))

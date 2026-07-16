@@ -161,6 +161,13 @@ def page_settings() -> None:
             ui.label(t("settings_alert_hint")).classes(
                 "text-xs text-gray-500 dark:text-gray-500")
 
+        # ── Data Retention ────────────────────────────────────────────────────
+        section(t("settings_retention"))
+        row("retention_days", t("settings_retention_days"))
+        with ui.row().classes("w-full"):
+            ui.label(t("settings_retention_hint")).classes(
+                "text-xs text-gray-500 dark:text-gray-500")
+
         ui.separator().classes("my-4")
 
         _settings_user_id = current["id"]

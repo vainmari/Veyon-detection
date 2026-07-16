@@ -12,6 +12,7 @@ from nicegui import context as _ctx
 
 from app.core.auth import is_admin, require_auth
 from app.db.database import (
+    MIN_PASSWORD_LENGTH,
     activate_user,
     auto_assign_user_events,
     create_user,
@@ -86,11 +87,11 @@ def page_users() -> None:
                         form_msg.classes(replace="text-sm text-red-500")
                         return
 
-                    # Enforce the same minimum password length as the
-                    # activation flow (users.py:do_activate) — otherwise an
-                    # admin could create accounts with passwords like "a".
-                    if len(pwd) < 6:
-                        form_msg.set_text(t("pwd_err_short"))
+                    # Same policy as the DB layer (validate_password) —
+                    # checked here too for a friendlier inline error.
+                    if len(pwd) < MIN_PASSWORD_LENGTH:
+                        form_msg.set_text(
+                            t("pwd_err_short").format(n=MIN_PASSWORD_LENGTH))
                         form_msg.classes(replace="text-sm text-red-500")
                         return
 
@@ -229,8 +230,9 @@ def page_users() -> None:
             with ui.row().classes("gap-2 mt-2"):
                 async def do_activate() -> None:
                     pwd = act_pwd.value.strip()
-                    if len(pwd) < 6:
-                        act_msg.set_text(t("pwd_err_short"))
+                    if len(pwd) < MIN_PASSWORD_LENGTH:
+                        act_msg.set_text(
+                            t("pwd_err_short").format(n=MIN_PASSWORD_LENGTH))
                         act_msg.classes(replace="text-sm text-red-500")
                         return
                     uid = _activate_row[0].get("id")
